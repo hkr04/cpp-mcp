@@ -386,10 +386,6 @@ bool stdio_client::start_server_process() {
         close(stdin_pipe_[0]);
         close(stdout_pipe_[1]);
         
-        // Set non-blocking mode
-        int flags = fcntl(STDIN_FILENO, F_GETFL, 0);
-        fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
-        
         // Execute command
         std::vector<std::string> args;
         std::istringstream iss(command_);
@@ -417,10 +413,6 @@ bool stdio_client::start_server_process() {
     // Close unnecessary pipe ends
     close(stdin_pipe_[0]);  // Close read end
     close(stdout_pipe_[1]); // Close write end
-    
-    // Set non-blocking mode
-    int flags = fcntl(stdout_pipe_[0], F_GETFL, 0);
-    fcntl(stdout_pipe_[0], F_SETFL, flags | O_NONBLOCK);
     
     // Check if process is still running
     int status;
@@ -670,10 +662,6 @@ void stdio_client::read_thread_func() {
                 
                 // Retry after a short delay
                 std::this_thread::sleep_for(std::chrono::milliseconds(50 * retry_count));
-            } else if (error == ERROR_NO_DATA) {
-                // Simulate UNIX's EAGAIN/EWOULDBLOCK behavior
-                // The pipe is temporarily empty - this is normal for non-blocking mode
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             } else if (error != ERROR_IO_PENDING) {
                 // Other errors, log and retry
                 LOG_ERROR("Error reading from pipe: ", error);
@@ -764,13 +752,10 @@ void stdio_client::read_thread_func() {
             LOG_WARNING("Pipe closed by server");
             break;
         } else if (bytes_read == -1) {
-            if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                // No data to read in non-blocking mode
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            } else {
-                LOG_ERROR("Error reading from pipe: ", strerror(errno));
-                break;
-            }
+            // In blocking-mode, EAGAIN and EWOULDBLOCK would not happen
+            // Handle other errors
+            LOG_ERROR("Error reading from pipe: ", strerror(errno));
+            break;
         }
     }
 #endif

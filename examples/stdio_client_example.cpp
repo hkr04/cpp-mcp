@@ -51,26 +51,30 @@ int main(int argc, char** argv) {
         std::cout << "Server capabilities: " << capabilities.dump(2) << std::endl;
         
         // List available tools
-        auto tools = client.get_tools();
-        std::cout << "Available tools: " << tools.size() << std::endl;
-        for (const auto& tool : tools) {
-            std::cout << "  - " << tool.name << ": " << tool.description << std::endl;
-            // std::cout << tool.to_json().dump(2) << std::endl;
+        if (capabilities.contains("tools")) {
+            auto tools = client.get_tools();
+            std::cout << "Available tools: " << tools.size() << std::endl;
+            for (const auto& tool : tools) {
+                std::cout << "  - " << tool.name << ": " << tool.description << std::endl;
+                // std::cout << tool.to_json().dump(2) << std::endl;
+            }
         }
         
         // List available resources
-        auto resources = client.list_resources();
-        std::cout << "Available resources: " << resources.dump(2) << std::endl;
-        
-        // If there are resources, read the first one
-        if (resources.contains("resources") && resources["resources"].is_array() && !resources["resources"].empty()) {
-            auto resource = resources["resources"][0];
-            if (resource.contains("uri")) {
-                std::string uri = resource["uri"];
-                std::cout << "Reading resource: " << uri << std::endl;
-                
-                auto content = client.read_resource(uri);
-                std::cout << "Resource content: " << content.dump(2) << std::endl;
+        if (capabilities.contains("resources")) {
+            auto resources = client.list_resources();
+            std::cout << "Available resources: " << resources.dump(2) << std::endl;
+            
+            // If there are resources, read the first one
+            if (resources.contains("resources") && resources["resources"].is_array() && !resources["resources"].empty()) {
+                auto resource = resources["resources"][0];
+                if (resource.contains("uri")) {
+                    std::string uri = resource["uri"];
+                    std::cout << "Reading resource: " << uri << std::endl;
+                    
+                    auto content = client.read_resource(uri);
+                    std::cout << "Resource content: " << content.dump(2) << std::endl;
+                }
             }
         }
         
