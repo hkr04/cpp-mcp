@@ -637,7 +637,7 @@ void stdio_client::read_thread_func() {
                                 // Currently not handling requests from the server
                             }
                         }
-                    } catch (const json::exception& e) {
+                    } catch (const json::exception& /* e */) {
                         LOG_INFO("message: ", line);
                     }
                 }
@@ -662,7 +662,7 @@ void stdio_client::read_thread_func() {
                 
                 // Retry after a short delay
                 std::this_thread::sleep_for(std::chrono::milliseconds(50 * retry_count));
-            } else if (error != ERROR_IO_PENDING) {
+            } else if (error != ERROR_IO_PENDING && error != ERROR_NO_DATA) {
                 // Other errors, log and retry
                 LOG_ERROR("Error reading from pipe: ", error);
                 retry_count++;
