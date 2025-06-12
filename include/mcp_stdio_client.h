@@ -28,6 +28,13 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 #endif
 
 namespace mcp {
@@ -42,13 +49,22 @@ namespace mcp {
 class stdio_client : public client {
 public:
     /**
-     * @brief Constructor
+     * @brief Constructor for subprocess execution
      * @param command The command to execute to start the server
      * @param env_vars Optional environment variables to set for the server process
      * @param capabilities The capabilities of the client
      */
     stdio_client(const std::string& command, 
                  const json& env_vars = json::object(),
+                 const json& capabilities = json::object());
+
+    /**
+     * @brief Constructor for connecting to existing server
+     * @param host The server host (e.g., "localhost", "127.0.0.1")
+     * @param port The server port
+     * @param capabilities The capabilities of the client
+     */
+    stdio_client(const std::string& host, int port,
                  const json& capabilities = json::object());
 
     /**
@@ -163,11 +179,23 @@ public:
     bool is_running() const override;
 
 private:
+    // Connection type
+    enum class connection_type {
+        subprocess,  // Spawn subprocess and use pipes
+        network      // Connect to existing server via TCP
+    };
+    
     // Start server process
     bool start_server_process();
     
     // Stop server process
     void stop_server_process();
+    
+    // Start network connection
+    bool start_network_connection();
+    
+    // Stop network connection
+    void stop_network_connection();
     
     // Read thread function
     void read_thread_func();
@@ -175,11 +203,21 @@ private:
     // Send JSON-RPC request
     json send_jsonrpc(const request& req);
     
-    // Server command
+    // Connection type
+    connection_type conn_type_;
+    
+    // Server command (for subprocess mode)
     std::string command_;
     
-    // Process ID
+    // Network connection details (for network mode)
+    std::string host_;
+    int port_ = -1;
+    
+    // Process ID (for subprocess mode)
     int process_id_ = -1;
+    
+    // Socket descriptor (for network mode)
+    int socket_fd_ = -1;
     
 #if defined(_WIN32)
     // Windows platform specific process handle

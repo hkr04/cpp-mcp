@@ -11,6 +11,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <io.h>
 #else
 #include <unistd.h>
@@ -18,6 +20,11 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <errno.h>
 #endif
 
 #include <cstring>
@@ -28,21 +35,41 @@
 namespace mcp {
 
 stdio_client::stdio_client(const std::string& command, const json& env_vars, const json& capabilities)
-    : command_(command), capabilities_(capabilities), env_vars_(env_vars) {
+    : conn_type_(connection_type::subprocess), command_(command), capabilities_(capabilities), env_vars_(env_vars) {
     
     LOG_INFO("Creating MCP stdio client for command: ", command);
 }
 
+stdio_client::stdio_client(const std::string& host, int port, const json& capabilities)
+    : conn_type_(connection_type::network), host_(host), port_(port), capabilities_(capabilities) {
+    
+    LOG_INFO("Creating MCP stdio client for network connection: ", host, ":", port);
+}
+
 stdio_client::~stdio_client() {
-    stop_server_process();
+    if (conn_type_ == connection_type::subprocess) {
+        stop_server_process();
+    } else {
+        stop_network_connection();
+    }
 }
 
 bool stdio_client::initialize(const std::string& client_name, const std::string& client_version) {
     LOG_INFO("Initializing MCP stdio client...");
     
-    if (!start_server_process()) {
-        LOG_ERROR("Failed to start server process");
-        return false;
+    bool connection_success = false;
+    if (conn_type_ == connection_type::subprocess) {
+        connection_success = start_server_process();
+        if (!connection_success) {
+            LOG_ERROR("Failed to start server process");
+            return false;
+        }
+    } else {
+        connection_success = start_network_connection();
+        if (!connection_success) {
+            LOG_ERROR("Failed to connect to server");
+            return false;
+        }
     }
     
     request req = request::create("initialize", {
@@ -68,7 +95,11 @@ bool stdio_client::initialize(const std::string& client_name, const std::string&
         return true;
     } catch (const std::exception& e) {
         LOG_ERROR("Initialization failed: ", e.what());
-        stop_server_process();
+        if (conn_type_ == connection_type::subprocess) {
+            stop_server_process();
+        } else {
+            stop_network_connection();
+        }
         return false;
     }
 }
@@ -195,6 +226,127 @@ void stdio_client::set_environment_variables(const json& env_vars) {
         return;
     }
     env_vars_ = env_vars;
+}
+
+bool stdio_client::start_network_connection() {
+    if (running_) {
+        LOG_INFO("Network connection already established");
+        return true;
+    }
+    
+    LOG_INFO("Connecting to server: ", host_, ":", port_);
+
+#if defined(_WIN32)
+    // Initialize Winsock
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) {
+        LOG_ERROR("WSAStartup failed: ", result);
+        return false;
+    }
+#endif
+
+    // Create socket
+    socket_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if (socket_fd_ < 0) {
+        LOG_ERROR("Failed to create socket: ", strerror(errno));
+#if defined(_WIN32)
+        WSACleanup();
+#endif
+        return false;
+    }
+
+    // Resolve hostname
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(port_);
+
+    if (inet_pton(AF_INET, host_.c_str(), &server_addr.sin_addr) <= 0) {
+        // Try to resolve hostname
+        struct hostent* host_entry = gethostbyname(host_.c_str());
+        if (host_entry == nullptr) {
+            LOG_ERROR("Failed to resolve hostname: ", host_);
+#if defined(_WIN32)
+            closesocket(socket_fd_);
+            WSACleanup();
+#else
+            close(socket_fd_);
+#endif
+            socket_fd_ = -1;
+            return false;
+        }
+        memcpy(&server_addr.sin_addr, host_entry->h_addr_list[0], host_entry->h_length);
+    }
+
+    // Connect to server
+    if (connect(socket_fd_, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) {
+        LOG_ERROR("Failed to connect to server: ", strerror(errno));
+#if defined(_WIN32)
+        closesocket(socket_fd_);
+        WSACleanup();
+#else
+        close(socket_fd_);
+#endif
+        socket_fd_ = -1;
+        return false;
+    }
+
+    // Set non-blocking mode
+#if defined(_WIN32)
+    u_long mode = 1;
+    if (ioctlsocket(socket_fd_, FIONBIO, &mode) != 0) {
+        LOG_ERROR("Failed to set non-blocking mode: ", WSAGetLastError());
+        closesocket(socket_fd_);
+        WSACleanup();
+        socket_fd_ = -1;
+        return false;
+    }
+#else
+    int flags = fcntl(socket_fd_, F_GETFL, 0);
+    if (fcntl(socket_fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+        LOG_ERROR("Failed to set non-blocking mode: ", strerror(errno));
+        close(socket_fd_);
+        socket_fd_ = -1;
+        return false;
+    }
+#endif
+
+    running_ = true;
+    
+    // Start read thread
+    read_thread_ = std::make_unique<std::thread>(&stdio_client::read_thread_func, this);
+    
+    LOG_INFO("Network connection established successfully");
+    return true;
+}
+
+void stdio_client::stop_network_connection() {
+    if (!running_) {
+        return;
+    }
+    
+    LOG_INFO("Stopping network connection...");
+    
+    running_ = false;
+    
+    // Wait for read thread to finish
+    if (read_thread_ && read_thread_->joinable()) {
+        read_thread_->join();
+    }
+    
+    // Close socket
+    if (socket_fd_ >= 0) {
+#if defined(_WIN32)
+        closesocket(socket_fd_);
+        WSACleanup();
+#else
+        close(socket_fd_);
+#endif
+        socket_fd_ = -1;
+    }
+    
+    LOG_INFO("Network connection stopped");
 }
 
 bool stdio_client::start_server_process() {
@@ -586,17 +738,105 @@ void stdio_client::read_thread_func() {
     char buffer[buffer_size];
     std::string data_buffer;
     
+    if (conn_type_ == connection_type::network) {
+        // Network socket reading
+        while (running_) {
+            ssize_t bytes_read;
 #if defined(_WIN32)
-    // Windows implementation
-    DWORD bytes_read;
-    int retry_count = 0;
-    
-    // Give the process some startup time (similar to UNIX implementation)
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    
-    while (running_) {
-        // Read data
-        BOOL success = ReadFile(stdout_pipe_[0], buffer, buffer_size - 1, &bytes_read, NULL);
+            bytes_read = recv(socket_fd_, buffer, buffer_size - 1, 0);
+            if (bytes_read == SOCKET_ERROR) {
+                int error = WSAGetLastError();
+                if (error == WSAEWOULDBLOCK) {
+                    // No data available, continue
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                } else {
+                    LOG_ERROR("Socket read error: ", error);
+                    break;
+                }
+            }
+#else
+            bytes_read = recv(socket_fd_, buffer, buffer_size - 1, 0);
+            if (bytes_read < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    // No data available, continue
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                } else {
+                    LOG_ERROR("Socket read error: ", strerror(errno));
+                    break;
+                }
+            }
+#endif
+            if (bytes_read == 0) {
+                // Connection closed by peer
+                LOG_WARNING("Connection closed by server");
+                break;
+            }
+            
+            buffer[bytes_read] = '\0';
+            data_buffer.append(buffer, bytes_read);
+            
+            // Process complete JSON-RPC messages
+            size_t pos = 0;
+            while ((pos = data_buffer.find('\n')) != std::string::npos) {
+                std::string line = data_buffer.substr(0, pos);
+                data_buffer.erase(0, pos + 1);
+                
+                if (!line.empty()) {
+                    try {
+                        json message = json::parse(line);
+                        
+                        if (message.contains("jsonrpc") && message["jsonrpc"] == "2.0") {
+                            if (message.contains("id") && !message["id"].is_null()) {
+                                // This is a response
+                                json id = message["id"];
+                                
+                                std::lock_guard<std::mutex> lock(response_mutex_);
+                                auto it = pending_requests_.find(id);
+                                
+                                if (it != pending_requests_.end()) {
+                                    if (message.contains("result")) {
+                                        it->second.set_value(message["result"]);
+                                    } else if (message.contains("error")) {
+                                        json error_result = {
+                                            {"isError", true},
+                                            {"error", message["error"]}
+                                        };
+                                        it->second.set_value(error_result);
+                                    } else {
+                                        it->second.set_value(json::object());
+                                    }
+                                    
+                                    pending_requests_.erase(it);
+                                } else {
+                                    LOG_WARNING("Received response for unknown request ID: ", id);
+                                }
+                            } else if (message.contains("method")) {
+                                // This is a request or notification
+                                LOG_INFO("Received request/notification: ", message["method"]);
+                                // Currently not handling requests from the server
+                            }
+                        }
+                    } catch (const json::exception& e) {
+                        LOG_INFO("message: ", line);
+                    }
+                }
+            }
+        }
+    } else {
+        // Pipe reading (existing subprocess implementation)
+#if defined(_WIN32)
+        // Windows implementation
+        DWORD bytes_read;
+        int retry_count = 0;
+        
+        // Give the process some startup time (similar to UNIX implementation)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        while (running_) {
+            // Read data
+            BOOL success = ReadFile(stdout_pipe_[0], buffer, buffer_size - 1, &bytes_read, NULL);
         
         if (success && bytes_read > 0) {
             // Successfully read data
@@ -774,36 +1014,60 @@ void stdio_client::read_thread_func() {
         }
     }
 #endif
+    }
     
     LOG_INFO("Read thread stopped");
 }
 
 json stdio_client::send_jsonrpc(const request& req) {
     if (!running_) {
-        throw mcp_exception(error_code::internal_error, "Server process not running");
+        throw mcp_exception(error_code::internal_error, "Connection not established");
     }
     
     json req_json = req.to_json();
     std::string req_str = req_json.dump() + "\n";
     
+    if (conn_type_ == connection_type::network) {
+        // Network socket writing
+        ssize_t bytes_written;
 #if defined(_WIN32)
-    // Windows implementation
-    DWORD bytes_written;
-    BOOL success = WriteFile(stdin_pipe_[1], req_str.c_str(), static_cast<DWORD>(req_str.size()), &bytes_written, NULL);
-    
-    if (!success || bytes_written != static_cast<DWORD>(req_str.size())) {
-        LOG_ERROR("Failed to write complete request: ", GetLastError());
-        throw mcp_exception(error_code::internal_error, "Failed to write to pipe");
-    }
+        bytes_written = send(socket_fd_, req_str.c_str(), static_cast<int>(req_str.size()), 0);
+        if (bytes_written == SOCKET_ERROR) {
+            LOG_ERROR("Failed to write to socket: ", WSAGetLastError());
+            throw mcp_exception(error_code::internal_error, "Failed to write to socket");
+        }
 #else
-    // POSIX implementation
-    ssize_t bytes_written = write(stdin_pipe_[1], req_str.c_str(), req_str.size());
-    
-    if (bytes_written != static_cast<ssize_t>(req_str.size())) {
-        LOG_ERROR("Failed to write complete request: ", strerror(errno));
-        throw mcp_exception(error_code::internal_error, "Failed to write to pipe");
-    }
+        bytes_written = send(socket_fd_, req_str.c_str(), req_str.size(), 0);
+        if (bytes_written < 0) {
+            LOG_ERROR("Failed to write to socket: ", strerror(errno));
+            throw mcp_exception(error_code::internal_error, "Failed to write to socket");
+        }
 #endif
+        if (bytes_written != static_cast<ssize_t>(req_str.size())) {
+            LOG_ERROR("Failed to write complete request to socket");
+            throw mcp_exception(error_code::internal_error, "Failed to write complete request to socket");
+        }
+    } else {
+        // Pipe writing (subprocess mode)
+#if defined(_WIN32)
+        // Windows implementation
+        DWORD bytes_written;
+        BOOL success = WriteFile(stdin_pipe_[1], req_str.c_str(), static_cast<DWORD>(req_str.size()), &bytes_written, NULL);
+        
+        if (!success || bytes_written != static_cast<DWORD>(req_str.size())) {
+            LOG_ERROR("Failed to write complete request: ", GetLastError());
+            throw mcp_exception(error_code::internal_error, "Failed to write to pipe");
+        }
+#else
+        // POSIX implementation
+        ssize_t bytes_written = write(stdin_pipe_[1], req_str.c_str(), req_str.size());
+        
+        if (bytes_written != static_cast<ssize_t>(req_str.size())) {
+            LOG_ERROR("Failed to write complete request: ", strerror(errno));
+            throw mcp_exception(error_code::internal_error, "Failed to write to pipe");
+        }
+#endif
+    }
     
     // If this is a notification, no need to wait for a response
     if (req.is_notification()) {

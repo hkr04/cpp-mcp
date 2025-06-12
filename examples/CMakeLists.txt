@@ -15,6 +15,7 @@ add_executable(${TARGET} stdio_client_example.cpp)
 target_link_libraries(${TARGET} PRIVATE mcp)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
+
 set(TARGET server_example)
 add_executable(${TARGET} server_example.cpp)
 target_link_libraries(${TARGET} PRIVATE mcp)
@@ -30,3 +31,6 @@ target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/include)
 if(OPENSSL_FOUND)
     target_link_libraries(${TARGET} PRIVATE ${OPENSSL_LIBRARIES})
 endif()
+
+# Add network subdirectory
+add_subdirectory(network)
