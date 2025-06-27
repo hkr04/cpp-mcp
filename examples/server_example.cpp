@@ -171,7 +171,13 @@ int main() {
     // Start server
     std::cout << "Starting MCP server at localhost:8888..." << std::endl;
     std::cout << "Press Ctrl+C to stop the server" << std::endl;
-    server.start(true);  // Blocking mode
+    server.start(false);  // Unblocking mode
+
+    std::this_thread::sleep_for(std::chrono::seconds(5));
+
+    std::cout << "Stopping server..." << '\n';
+
+    server.stop();  // This will trigger a crash!
     
     return 0;
 } 

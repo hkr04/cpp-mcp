@@ -49,10 +49,19 @@ bool server::start(bool blocking) {
     // Start resource check thread (only start in non-blocking mode)
     if (!blocking) {
         maintenance_thread_ = std::make_unique<std::thread>([this]() {
+            std::unique_lock<std::mutex> lock(maintenance_mutex_);
             while (running_) {
                 // Check inactive sessions every 60 seconds
-                std::this_thread::sleep_for(std::chrono::seconds(60));
+                if (maintenance_cv_.wait_for(lock, std::chrono::seconds(60), [this](){
+                        return !running_ || stop_requested_;
+                    }
+                ))
+                {
+                    break;
+                }
+
                 if (running_) {
+                    lock.unlock();
                     try {
                         check_inactive_sessions();
                     } catch (const std::exception& e) {
@@ -60,6 +69,7 @@ bool server::start(bool blocking) {
                     } catch (...) {
                         LOG_ERROR("Unknown exception in maintenance thread");
                     }
+                    lock.lock();
                 }
             }
         });
@@ -98,6 +108,12 @@ void server::stop() {
     LOG_INFO("Stopping MCP server on ", host_, ":", port_);
     running_ = false;
     
+    {
+        std::lock_guard<std::mutex> lock(maintenance_mutex_);
+        stop_requested_ = true;
+    }
+    maintenance_cv_.notify_one(); // Notify maintenance thread to stop checking sessions
+
     // Close maintenance thread
     if (maintenance_thread_ && maintenance_thread_->joinable()) {
         try {
@@ -716,18 +732,18 @@ json server::handle_initialize(const request& req, const std::string& session_id
     std::string requested_version = params["protocolVersion"].get<std::string>();
     LOG_INFO("Client requested protocol version: ", requested_version);
 
-    if (requested_version != MCP_VERSION) {
-        LOG_ERROR("Unsupported protocol version: ", requested_version, ", server supports: ", MCP_VERSION);
-        return response::create_error(
-            req.id, 
-            error_code::invalid_params, 
-            "Unsupported protocol version",
-            {
-                {"supported", {MCP_VERSION}},
-                {"requested", params["protocolVersion"]}
-            }
-        ).to_json();
-    }
+    //if (requested_version != MCP_VERSION) {
+    //    LOG_ERROR("Unsupported protocol version: ", requested_version, ", server supports: ", MCP_VERSION);
+    //    return response::create_error(
+    //        req.id, 
+    //        error_code::invalid_params, 
+    //        "Unsupported protocol version",
+    //        {
+    //            {"supported", {MCP_VERSION}},
+    //            {"requested", params["protocolVersion"]}
+    //        }
+    //    ).to_json();
+    //}
 
     // Extract client info
     std::string client_name = "UnknownClient";
