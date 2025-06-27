@@ -398,6 +398,10 @@ private:
 
     // Close session
     void close_session(const std::string& session_id);
+
+    std::mutex maintenance_mutex_;
+    std::condition_variable maintenance_cv_;
+    bool stop_requested_ = false;
 };
 
 } // namespace mcp
