@@ -45,6 +45,18 @@ dpkg-buildpackage -us -uc
 # Install the .deb file
 sudo dpkg -i ../libcpp-mcp-dev_*.deb
 ```
+
+Install system wide on archlinux based system:
+```
+# From AUR
+yay -S cpp-mcp
+```
+
+Install system wide on Void Linux:
+```
+# Coming Soon
+sudo xbps-install -Su cpp-mcp
+```
 How to use on Linux
 ```
 # Replace the #include section in this manner
@@ -57,7 +69,7 @@ How to use on Linux
 sed -i '1,/^$/{s/#include "\([^"]*\)"/#include <mcp\/\1>/g}' examples/agent_example.cpp
 
 # Compile
-g++ examples/agent_example.cpp -lmcp -o agent_example
+g++ examples/agent_example.cpp -lmcp -lssl -lcrypto -o agent_example
 ```
 
 ## Adopters
@@ -66,7 +78,7 @@ Here are some open-source projects that are using this repository.
 If you're using it too, feel free to submit a PR to be featured here!
 
 - [humanus.cpp](https://github.com/WHU-MYTH-Lab/humanus.cpp): Lightweight C++ LLM agent framework
-- [llama.cpp.mcp](https://github.com/klogdotwebsitenotdotcom/llama.cpp.mcp): Integration with llama.cpp
+- [llama.cpp.mcp](https://github.com/klogdotwebsitenotdotcom/llama.cpp.mcp): Yet Another Agent Framework
 - ...waiting for your contribution...
 
 
