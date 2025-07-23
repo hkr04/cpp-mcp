@@ -1,0 +1,13 @@
+include/mcp_client.h usr/include/mcp/
+include/mcp_logger.h usr/include/mcp/
+include/mcp_message.h usr/include/mcp/
+include/mcp_resource.h usr/include/mcp/
+include/mcp_server.h usr/include/mcp/
+include/mcp_sse_client.h usr/include/mcp/
+include/mcp_stdio_client.h usr/include/mcp/
+include/mcp_thread_pool.h usr/include/mcp/
+include/mcp_tool.h usr/include/mcp/
+common/base64.hpp usr/include/mcp/
+common/httplib.h usr/include/mcp/
+common/json.hpp usr/include/mcp/
+obj-x86_64-linux-gnu/src/libmcp.a usr/lib/ 

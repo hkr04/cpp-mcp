@@ -1,0 +1,7 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: cpp-mcp
+Source: https://github.com/hkr04/cpp-mcp
+
+Files: *
+Copyright: YEAR Your Name
+License: MIT 

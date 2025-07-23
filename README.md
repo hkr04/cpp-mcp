@@ -34,12 +34,39 @@ cmake -B build -DMCP_SSL=ON
 cmake --build build --config Release
 ```
 
+Install system wide on debian based systems:
+```
+# What you need to build the .deb packages
+sudo apt update && sudo apt install -y devscripts build-essential debhelper fakeroot lintian dh-make ccache
+# Clone the repo
+mkdir ~/libmcp && git clone https://github.com/hkr04/cpp-mcp ~/libmcp/cpp-mcp && cd ~/libmcp/cpp-mcp
+# Generate the .deb file
+dpkg-buildpackage -us -uc
+# Install the .deb file
+sudo dpkg -i ../libcpp-mcp-dev_*.deb
+```
+How to use on Linux
+```
+# Replace the #include section in this manner
+
+#include <mcp/httplib.h>
+#include <mcp/mcp_server.h>
+#include <mcp/mcp_sse_client.h>
+
+# The command to do it for the agent_example.cpp from the inside the git repo
+sed -i '1,/^$/{s/#include "\([^"]*\)"/#include <mcp\/\1>/g}' examples/agent_example.cpp
+
+# Compile
+g++ examples/agent_example.cpp -lmcp -o agent_example
+```
+
 ## Adopters
 
 Here are some open-source projects that are using this repository.  
 If you're using it too, feel free to submit a PR to be featured here!
 
 - [humanus.cpp](https://github.com/WHU-MYTH-Lab/humanus.cpp): Lightweight C++ LLM agent framework
+- [llama.cpp.mcp](https://github.com/klogdotwebsitenotdotcom/llama.cpp.mcp): Integration with llama.cpp
 - ...waiting for your contribution...
 
 

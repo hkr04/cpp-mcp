@@ -1,0 +1,13 @@
+Source: cpp-mcp
+Section: libs
+Priority: optional
+Maintainer: K_log Televised - youtube klog.website.notdotcom@gmail.com
+Build-Depends: debhelper-compat (= 13), cmake, g++, libssl-dev
+Standards-Version: 4.6.2
+Homepage: https://github.com/hkr04/cpp-mcp
+
+Package: libcpp-mcp-dev
+Architecture: any
+Depends: ${misc:Depends}
+Description: C++ implementation of Model Context Protocol (MCP)
+ C++ static library and headers for MCP protocol.
