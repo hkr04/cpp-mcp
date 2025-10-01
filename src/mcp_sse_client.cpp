@@ -124,8 +124,10 @@ bool sse_client::ping() {
 }
 
 void sse_client::set_auth_token(const std::string& token) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auth_token_ = token;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auth_token_ = token;
+    }
     set_header("Authorization", "Bearer " + auth_token_);
 }
 
