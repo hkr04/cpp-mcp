@@ -10,9 +10,33 @@
 
 namespace mcp {
 
-server::server(const std::string& host, int port, const std::string& name, const std::string& version, const std::string& sse_endpoint, const std::string& msg_endpoint)
-    : host_(host), port_(port), name_(name), version_(version), sse_endpoint_(sse_endpoint), msg_endpoint_(msg_endpoint) {
-    http_server_ = std::make_unique<httplib::Server>();
+
+server::server(const server::configuration& conf)
+    : host_(conf.host)
+    , port_(conf.port)
+    , name_(conf.name)
+    , version_(conf.version)
+    , sse_endpoint_(conf.sse_endpoint)
+    , msg_endpoint_(conf.msg_endpoint)
+{
+    #ifdef MCP_SSL
+    if (conf.ssl.server_cert_path && conf.ssl.server_private_key_path) {
+        if (!std::filesystem::exists(*conf.ssl.server_cert_path)) {
+            LOG_ERROR("SSL certificate file '", *conf.ssl.server_cert_path, "' not found");
+        }
+
+        if (!std::filesystem::exists(*conf.ssl.server_private_key_path)) {
+            LOG_ERROR("SSL key file '", *conf.ssl.server_private_key_path, "' not found");
+        }
+
+        http_server_ = std::make_unique<httplib::SSLServer>(conf.ssl.server_cert_path->c_str(),
+            conf.ssl.server_private_key_path->c_str());
+    } else {
+        http_server_ = std::make_unique<httplib::Server>();
+    }
+    #else
+     http_server_ = std::make_unique<httplib::Server>();
+    #endif
 }
 
 server::~server() {

@@ -122,7 +122,13 @@ int main() {
     std::filesystem::create_directories("./files");
     
     // Create and configure server
-    mcp::server server("localhost", 8888);
+    mcp::server::configuration srv_conf;
+    srv_conf.host = "localhost";
+    srv_conf.port = 8888;    
+    // srv_conf.ssl.server_cert_path = "./server.cert.pem";
+    // srv_conf.ssl.server_private_key_path = "./server.key.pem";
+
+    mcp::server server(srv_conf);
     server.set_server_info("ExampleServer", "1.0.0");
     
     // Set server capabilities
@@ -169,7 +175,7 @@ int main() {
     // server.register_resource("file://./Makefile", file_resource);
     
     // Start server
-    std::cout << "Starting MCP server at localhost:8888..." << std::endl;
+    std::cout << "Starting MCP server at " << srv_conf.host << ":" << srv_conf.port << std::endl;
     std::cout << "Press Ctrl+C to stop the server" << std::endl;
     server.start(true);  // Blocking mode
     

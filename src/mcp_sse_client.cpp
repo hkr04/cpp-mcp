@@ -11,23 +11,20 @@
 
 namespace mcp {
 
-sse_client::sse_client(const std::string& host, int port, const std::string& sse_endpoint)
-    : host_(host), port_(port), sse_endpoint_(sse_endpoint) {
-    init_client(host, port);
-}
-
-sse_client::sse_client(const std::string& base_url, const std::string& sse_endpoint)
-    : base_url_(base_url), sse_endpoint_(sse_endpoint) {
-    init_client(base_url);
+sse_client::sse_client(const std::string& scheme_host_port, const std::string& sse_endpoint, bool validate_certificates,
+    const std::string& ca_cert_path)
+    : scheme_host_port_(scheme_host_port), sse_endpoint_(sse_endpoint) {
+    init_client(scheme_host_port, validate_certificates, ca_cert_path);
 }
 
 sse_client::~sse_client() {
     close_sse_connection();
 }
 
-void sse_client::init_client(const std::string& host, int port) {
-    http_client_ = std::make_unique<httplib::Client>(host.c_str(), port);
-    sse_client_ = std::make_unique<httplib::Client>(host.c_str(), port);
+
+void sse_client::init_client(const std::string& scheme_host_port, bool validate_certificates, const std::string& ca_cert_path) {
+    http_client_ = std::make_unique<httplib::Client>(scheme_host_port.c_str());
+    sse_client_ = std::make_unique<httplib::Client>(scheme_host_port.c_str());
 
     http_client_->set_connection_timeout(timeout_seconds_, 0);
     http_client_->set_read_timeout(timeout_seconds_, 0);
@@ -35,18 +32,15 @@ void sse_client::init_client(const std::string& host, int port) {
     
     sse_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
     sse_client_->set_write_timeout(timeout_seconds_, 0);
-}
 
-void sse_client::init_client(const std::string& base_url) {
-    http_client_ = std::make_unique<httplib::Client>(base_url.c_str());
-    sse_client_ = std::make_unique<httplib::Client>(base_url.c_str());
-
-    http_client_->set_connection_timeout(timeout_seconds_, 0);
-    http_client_->set_read_timeout(timeout_seconds_, 0);
-    http_client_->set_write_timeout(timeout_seconds_, 0);
-    
-    sse_client_->set_connection_timeout(timeout_seconds_ * 2, 0);
-    sse_client_->set_write_timeout(timeout_seconds_, 0);
+    #ifdef MCP_SSL
+    http_client_->enable_server_certificate_verification(validate_certificates);
+    sse_client_->enable_server_certificate_verification(validate_certificates);
+    if (!ca_cert_path.empty()) {
+        http_client_->set_ca_cert_path(ca_cert_path.c_str());
+        sse_client_->set_ca_cert_path(ca_cert_path.c_str());
+    }
+    #endif
 }
 
 bool sse_client::initialize(const std::string& client_name, const std::string& client_version) {
@@ -256,12 +250,7 @@ void sse_client::open_sse_connection() {
         endpoint_cv_.notify_all();
     }
     
-    std::string connection_info;
-    if (!base_url_.empty()) {
-        connection_info = "Base URL: " + base_url_ + ", SSE Endpoint: " + sse_endpoint_;
-    } else {
-        connection_info = "Host: " + host_ + ", Port: " + std::to_string(port_) + ", SSE Endpoint: " + sse_endpoint_;
-    }
+    std::string connection_info = "Base URL: " + scheme_host_port_ + ", SSE Endpoint: " + sse_endpoint_;    
     LOG_INFO("Attempting to establish SSE connection: ", connection_info);
     
     sse_thread_ = std::make_unique<std::thread>([this]() {

@@ -267,8 +267,12 @@ int main(int argc, char* argv[]) {
     // Global config
     config = parse_config(argc, argv);
 
-    // Create example server with Calculator tool
-    mcp::server server("localhost", config.port);
+    // Create example server with Calculator tool    
+    mcp::server::configuration srv_conf;
+    srv_conf.port = config.port;
+    srv_conf.host = "localhost";
+
+    mcp::server server(srv_conf);
     server.set_server_info("ExampleServer", "0.1.0");
     mcp::json capabilities = {
         {"tools", mcp::json::object()}
@@ -306,7 +310,7 @@ int main(int argc, char* argv[]) {
     server.start(false);  // Non-blocking mode
 
     // Create a client
-    mcp::sse_client client("localhost", config.port);
+    mcp::sse_client client("http://localhost:" + std::to_string(config.port));
     
     // Set timeout
     client.set_timeout(10);
