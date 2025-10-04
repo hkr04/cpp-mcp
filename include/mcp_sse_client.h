@@ -40,17 +40,14 @@ class sse_client : public client {
 public:
     /**
      * @brief Constructor
-     * @param host The server host (e.g., "localhost", "example.com")
-     * @param port The server port
-     * @param sse_endpoint The endpoint for server-sent events
+     * @param scheme_host_port The base URL of the server (e.g., "http://localhost:8080")
+     * @param sse_endpoint The SSE endpoint (default: "/sse")
+     * @param validate_certificates Whether to validate SSL certificates (default: true)
+     * @param ca_cert_path path to CA certificate file for SSL validation (optional).
+     * This is required if validate_certificates is true.
      */
-    sse_client(const std::string& host, int port = 8080, const std::string& sse_endpoint = "/sse");
-
-    /**
-     * @brief Constructor
-     * @param base_url The base URL of the server (e.g., "localhost:8080")
-     */
-    sse_client(const std::string& base_url, const std::string& sse_endpoint = "/sse");
+    sse_client(const std::string& scheme_host_port, const std::string& sse_endpoint = "/sse",
+        bool validate_certificates = true, const std::string& ca_cert_path = "");
 
     /**
      * @brief Destructor
@@ -177,8 +174,7 @@ public:
 
 private:
     // Initialize HTTP client
-    void init_client(const std::string& host, int port);
-    void init_client(const std::string& base_url);
+    void init_client(const std::string& scheme_host_port, bool validate_certificates, const std::string& ca_cert_path);
     
     // Open SSE connection
     void open_sse_connection();
@@ -196,8 +192,8 @@ private:
     std::string host_;
     int port_ = 8080;
     
-    // Use base URL
-    std::string base_url_;
+    // scheme://host:port
+    std::string scheme_host_port_;
     
     // SSE endpoint
     std::string sse_endpoint_ = "/sse";

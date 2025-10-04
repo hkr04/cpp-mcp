@@ -29,6 +29,7 @@
 #include <condition_variable>
 #include <future>
 #include <atomic>
+#include <optional>
 
 
 namespace mcp {
@@ -172,21 +173,56 @@ private:
  */
 class server {
 public:
+
+    /**
+     * @struct configuration
+     * @brief Configuration settings for the server.
+     *
+     * This struct holds all configurable parameters for the server, including
+     * network bindings, identification, and endpoint paths. If SSL is enabled,
+     * it also includes paths to the server certificate and private key.
+     */
+    struct configuration {
+        /** Host to bind to (e.g., "localhost", "0.0.0.0") */
+        std::string host{ "localhost" };
+
+        /** Port to listen on */
+        int port{ 8080 };
+
+        /** Server name */
+        std::string name{ "MCP Server" };
+
+        /** Server version */
+        std::string version{ "0.0.1" };
+
+        /** SSE endpoint path */
+        std::string sse_endpoint{ "/sse" };
+
+        /** Message endpoint path */
+        std::string msg_endpoint{ "/message" };
+
+        #ifdef MCP_SSL        
+        /**
+         * @brief SSL configuration settings.
+         *
+         * Contains optional paths to the server certificate and private key.
+         * These are used when SSL support is enabled.
+         */
+        struct {
+            /** Path to the server certificate */
+            std::optional<std::string> server_cert_path{ std::nullopt };
+
+            /** Path to the server private key */
+            std::optional<std::string> server_private_key_path{ std::nullopt };
+        } ssl;
+        #endif
+    };
+
     /**
      * @brief Constructor
-     * @param host The host to bind to (e.g., "localhost", "0.0.0.0")
-     * @param port The port to listen on
-     * @param name The name of the server
-     * @param version The version of the server
-     * @param sse_endpoint The endpoint for server-sent events
-     * @param msg_endpoint The endpoint for messages
+     * @param conf The server configuration
      */
-    server(const std::string& host = "localhost", 
-        int port = 8080, 
-        const std::string& name = "MCP Server",
-        const std::string& version = "0.0.1",
-        const std::string& sse_endpoint = "/sse",
-        const std::string& msg_endpoint = "/message");
+    server(const server::configuration& conf);   
     
     /**
      * @brief Destructor

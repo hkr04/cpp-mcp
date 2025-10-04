@@ -122,7 +122,11 @@ Example usage:
 
 ```cpp
 // Create and configure the server
-mcp::server server("localhost", 8080); // Host and port
+mcp::server::configuration srv_conf;
+srv_conf.host = "localhost";
+srv_conf.port = 8888;
+
+mcp::server server(srv_conf);
 server.set_server_info("MCP Example Server", "0.1.0"); // Name and version
 
 // Register tools
@@ -160,7 +164,7 @@ server.start(true);  // Blocking mode
 
 ```cpp
 // Connect to the server
-mcp::sse_client client("localhost", 8080);
+mcp::sse_client client("http://localhost:8080");
 
 // Initialize the connection
 client.initialize("My Client", "1.0.0");
@@ -181,9 +185,7 @@ The SSE client uses HTTP and Server-Sent Events (SSE) to communicate with MCP se
 #include "mcp_sse_client.h"
 
 // Create a client, specifying the server address and port
-mcp::sse_client client("localhost", 8080);
-// Or use a base URL
-// mcp::sse_client client("http://localhost:8080");
+mcp::sse_client client("http://localhost:8080");
 
 // Set an authentication token (if needed)
 client.set_auth_token("your_auth_token");
@@ -234,6 +236,47 @@ json result = client.call_tool("tool_name", {
 });
 ```
 
+
+## Using TLS clients and servers
+
+### Creating test certificates on Linux
+1. Generate Certificate Authority (CA) private key
+    ```bash
+    openssl genrsa -out ca.key.pem 2048
+    ```
+1. Generate CA certificate
+    ```bash
+    openssl req -x509 -new -nodes -key ca.key.pem -sha256 -days 1 -out ca.cert.pem -subj "/CN=Test CA"
+    ```
+1. Generate server private key
+    ```bash
+    openssl genrsa -out server.key.pem 2048
+    ```
+1. Generate Certificate Signing Request (CSR)
+    ```
+    openssl req -new -key server.key.pem -out server.csr.pem -subj "/O=TestServer/OU=Dev/CN=localhost"
+    ```
+1. Generate server certificate signed by CA
+    ```
+    openssl x509 -req -in server.csr.pem -CA ca.cert.pem -CAkey ca.key.pem -CAcreateserial -out server.cert.pem -days 1 -sha256
+    ```
+### Setting up an HTTPs server
+
+```cpp
+mcp::server::configuration srv_conf;
+srv_conf.host = "localhost";
+srv_conf.port = 8888;
+srv_conf.ssl.server_cert_path = "./server.cert.pem";
+srv_conf.ssl.server_private_key_path = "./server.key.pem";
+```
+
+### Setting up an SSE client with TLS
+
+```cpp
+ mcp::sse_client client("https://localhost:8888");
+ ```
+
 ## License
 
-This framework is provided under the MIT license. For details, please see the LICENSE file. 
+This framework is provided under the MIT license. For details, please see the LICENSE file.
+

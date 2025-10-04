@@ -12,7 +12,9 @@
 
 int main() {
     // Create a client
-    mcp::sse_client client("localhost", 8888);
+    // mcp::sse_client client("https://localhost:8888", "/sse", true, "/etc/ssl/certs/ca-certificates.crt");
+    // mcp::sse_client client("https://localhost:8888", "/sse", true, "./ca.cert.pem");
+    mcp::sse_client client("http://localhost:8888");
 
     // Set capabilites
     mcp::json capabilities = {
