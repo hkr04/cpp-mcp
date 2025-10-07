@@ -680,11 +680,8 @@ json server::process_request(const request& req, const std::string& session_id) 
         
         if (handler) {
             // Call handler
-            LOG_INFO("Calling method handler: ", req.method);
-            auto future = thread_pool_.enqueue([handler, params = req.params, session_id]() -> json {
-                return handler(params, session_id);
-            });
-            json result = future.get();                        
+            LOG_INFO("Calling method handler: ", req.method);            
+            json result = handler(req.params, session_id);
             
             // Create success response
             LOG_INFO("Method call successful: ", req.method);
