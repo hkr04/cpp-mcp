@@ -18,6 +18,7 @@ server::server(const server::configuration& conf)
     , version_(conf.version)
     , sse_endpoint_(conf.sse_endpoint)
     , msg_endpoint_(conf.msg_endpoint)
+    , thread_pool_(conf.threadpool_size)
 {
     #ifdef MCP_SSL
     if (conf.ssl.server_cert_path && conf.ssl.server_private_key_path) {
@@ -683,7 +684,7 @@ json server::process_request(const request& req, const std::string& session_id) 
             auto future = thread_pool_.enqueue([handler, params = req.params, session_id]() -> json {
                 return handler(params, session_id);
             });
-            json result = future.get();
+            json result = future.get();                        
             
             // Create success response
             LOG_INFO("Method call successful: ", req.method);

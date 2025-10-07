@@ -5,7 +5,6 @@
  * This example demonstrates how to create an MCP server, register tools and resources,
  * and handle client requests. Follows the 2024-11-05 basic protocol specification.
  */
-
 #include "mcp_server.h"
 #include "mcp_tool.h"
 #include "mcp_resource.h"
@@ -124,7 +123,8 @@ int main() {
     // Create and configure server
     mcp::server::configuration srv_conf;
     srv_conf.host = "localhost";
-    srv_conf.port = 8888;    
+    srv_conf.port = 8888;
+    // srv_conf.threadpool_size = 4;
     // srv_conf.ssl.server_cert_path = "./server.cert.pem";
     // srv_conf.ssl.server_private_key_path = "./server.key.pem";
 
@@ -180,4 +180,4 @@ int main() {
     server.start(true);  // Blocking mode
     
     return 0;
-} 
+}

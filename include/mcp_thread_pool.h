@@ -24,8 +24,8 @@ public:
      * @brief Constructor
      * @param num_threads Number of threads in the thread pool
      */
-    explicit thread_pool(size_t num_threads = std::thread::hardware_concurrency()) : stop_(false) {
-        for (size_t i = 0; i < num_threads; ++i) {
+    explicit thread_pool(unsigned int num_threads = std::thread::hardware_concurrency()) : stop_(false) {
+        for (unsigned int i = 0; i < num_threads; ++i) {
             workers_.emplace_back([this] {
                 while (true) {
                     std::function<void()> task;
