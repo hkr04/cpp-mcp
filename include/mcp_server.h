@@ -201,6 +201,8 @@ public:
         /** Message endpoint path */
         std::string msg_endpoint{ "/message" };
 
+        unsigned int threadpool_size{ std::thread::hardware_concurrency() };
+
         #ifdef MCP_SSL        
         /**
          * @brief SSL configuration settings.
