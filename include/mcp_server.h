@@ -429,7 +429,11 @@ private:
 
     // Session management and maintenance
     void check_inactive_sessions();
+
+    std::mutex maintenance_mutex_;
+    std::condition_variable maintenance_cond_;
     std::unique_ptr<std::thread> maintenance_thread_;
+    bool maintenance_thread_run_ = false;
 
     // Session cleanup handler
     std::map<std::string, session_cleanup_handler> session_cleanup_handler_;

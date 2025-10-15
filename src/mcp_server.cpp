@@ -44,6 +44,7 @@ server::~server() {
     stop();
 }
 
+
 bool server::start(bool blocking) {
     if (running_) {
         return true;  // Already running
@@ -73,18 +74,26 @@ bool server::start(bool blocking) {
     
     // Start resource check thread (only start in non-blocking mode)
     if (!blocking) {
+        maintenance_thread_run_ = true;
         maintenance_thread_ = std::make_unique<std::thread>([this]() {
-            while (running_) {
+            while (true) {
                 // Check inactive sessions every 60 seconds
-                std::this_thread::sleep_for(std::chrono::seconds(60));
-                if (running_) {
-                    try {
-                        check_inactive_sessions();
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("Exception in maintenance thread: ", e.what());
-                    } catch (...) {
-                        LOG_ERROR("Unknown exception in maintenance thread");
-                    }
+                std::unique_lock<std::mutex> lock(maintenance_mutex_);
+                auto should_exit = maintenance_cond_.wait_for(lock, std::chrono::seconds(60), [this] {
+                    return !maintenance_thread_run_;
+                });
+                if (should_exit) {
+                    LOG_INFO("Maintenance thread exiting");
+                    return;
+                }
+                lock.unlock();
+
+                try {
+                    check_inactive_sessions();
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Exception in maintenance thread: ", e.what());
+                } catch (...) {
+                    LOG_ERROR("Unknown exception in maintenance thread");
                 }
             }
         });
@@ -122,9 +131,16 @@ void server::stop() {
     
     LOG_INFO("Stopping MCP server on ", host_, ":", port_);
     running_ = false;
-    
+
     // Close maintenance thread
     if (maintenance_thread_ && maintenance_thread_->joinable()) {
+        {
+            std::unique_lock<std::mutex> lock(maintenance_mutex_);
+            maintenance_thread_run_ = false;
+        }
+
+        maintenance_cond_.notify_one();
+
         try {
             maintenance_thread_->join();
         } catch (...) {
