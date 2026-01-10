@@ -3,7 +3,7 @@
  * @brief MCP Server implementation
  * 
  * This file implements the server-side functionality for the Model Context Protocol.
- * Follows the 2024-11-05 basic protocol specification.
+ * Supports protocol versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25
  */
 
 #ifndef MCP_SERVER_H

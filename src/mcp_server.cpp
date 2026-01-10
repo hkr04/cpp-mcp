@@ -3,7 +3,7 @@
  * @brief Implementation of the MCP server
  * 
  * This file implements the server-side functionality for the Model Context Protocol.
- * Follows the 2024-11-05 basic protocol specification.
+ * Supports protocol versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25
  */
 
 #include "mcp_server.h"
@@ -754,18 +754,38 @@ json server::handle_initialize(const request& req, const std::string& session_id
     std::string requested_version = params["protocolVersion"].get<std::string>();
     LOG_INFO("Client requested protocol version: ", requested_version);
 
-    if (requested_version != MCP_VERSION) {
-        LOG_ERROR("Unsupported protocol version: ", requested_version, ", server supports: ", MCP_VERSION);
+    // Check if the requested version is in our list of supported versions
+    bool version_supported = false;
+    std::string negotiated_version = MCP_VERSION; // Default to our latest
+    
+    for (size_t i = 0; i < SUPPORTED_PROTOCOL_VERSIONS_COUNT; ++i) {
+        if (requested_version == SUPPORTED_PROTOCOL_VERSIONS[i]) {
+            version_supported = true;
+            negotiated_version = requested_version; // Use the client's requested version
+            break;
+        }
+    }
+
+    if (!version_supported) {
+        // Build list of supported versions for error response
+        json supported_versions = json::array();
+        for (size_t i = 0; i < SUPPORTED_PROTOCOL_VERSIONS_COUNT; ++i) {
+            supported_versions.push_back(SUPPORTED_PROTOCOL_VERSIONS[i]);
+        }
+        
+        LOG_ERROR("Unsupported protocol version: ", requested_version, ", server supports: ", supported_versions.dump());
         return response::create_error(
             req.id, 
             error_code::invalid_params, 
             "Unsupported protocol version",
             {
-                {"supported", {MCP_VERSION}},
+                {"supported", supported_versions},
                 {"requested", params["protocolVersion"]}
             }
         ).to_json();
     }
+    
+    LOG_INFO("Negotiated protocol version: ", negotiated_version);
 
     // Extract client info
     std::string client_name = "UnknownClient";
@@ -790,7 +810,7 @@ json server::handle_initialize(const request& req, const std::string& session_id
     };
 
     json result = {
-        {"protocolVersion", MCP_VERSION},
+        {"protocolVersion", negotiated_version},
         {"capabilities", capabilities_},
         {"serverInfo", server_info}
     };

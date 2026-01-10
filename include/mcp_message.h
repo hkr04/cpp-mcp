@@ -3,7 +3,7 @@
  * @brief Core definitions for the Model Context Protocol (MCP) framework
  * 
  * This file contains the core structures and definitions for the MCP protocol.
- * Implements the 2024-11-05 basic protocol specification.
+ * Supports protocol versions: 2024-11-05, 2025-03-26, 2025-06-18, 2025-11-25
  */
 
 #ifndef MCP_MESSAGE_H
@@ -24,8 +24,18 @@ namespace mcp {
 // Use the nlohmann json library
 using json = nlohmann::ordered_json;
 
-// MCP version
-constexpr const char* MCP_VERSION = "2025-06-18";
+// MCP version - the latest version this server supports
+constexpr const char* MCP_VERSION = "2025-11-25";
+
+// All protocol versions this server supports (for version negotiation)
+// Servers should support older versions for backward compatibility
+constexpr const char* SUPPORTED_PROTOCOL_VERSIONS[] = {
+    "2025-11-25",  // Latest
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05"   // Original stable version
+};
+constexpr size_t SUPPORTED_PROTOCOL_VERSIONS_COUNT = sizeof(SUPPORTED_PROTOCOL_VERSIONS) / sizeof(SUPPORTED_PROTOCOL_VERSIONS[0]);
 
 // MCP error codes (JSON-RPC 2.0 standard codes)
 enum class error_code {
