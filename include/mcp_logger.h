@@ -79,8 +79,18 @@ private:
         // Add timestamp
         auto now = std::chrono::system_clock::now();
         auto now_c = std::chrono::system_clock::to_time_t(now);
+#if _CRT_SECURE_NO_WARNINGS
         auto now_tm = std::localtime(&now_c);
-        
+#else
+        std::tm _tm;
+#   ifdef _WIN32
+        localtime_s(&_tm, &now_c);
+#   else
+        localtime_r(&now_c, &_tm);
+#   endif
+        tm* now_tm = &_tm;
+#endif
+
         ss << std::put_time(now_tm, "%Y-%m-%d %H:%M:%S") << " ";
         
         // Add log level and color
