@@ -18,6 +18,7 @@ server::server(const server::configuration& conf)
     , version_(conf.version)
     , sse_endpoint_(conf.sse_endpoint)
     , msg_endpoint_(conf.msg_endpoint)
+    , http_endpoint_(conf.http_endpoint)
     , thread_pool_(conf.threadpool_size)
 {
     #ifdef MCP_SSL
@@ -55,21 +56,40 @@ bool server::start(bool blocking) {
     // Setup CORS handling
     http_server_->Options(".*", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
-        res.set_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type");
+        res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
         res.status = 204; // No Content
     });
-    
-    // Setup JSON-RPC endpoint
+
+    // Setup JSON-RPC endpoint (SSE transport)
     http_server_->Post(msg_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
         this->handle_jsonrpc(req, res);
         LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"POST ", req.path, " HTTP/1.1\" ", res.status);
     });
 
-    // Setup SSE endpoint
+    // Setup SSE endpoint (SSE transport)
     http_server_->Get(sse_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
         this->handle_sse(req, res);
         LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"GET ", req.path, " HTTP/1.1\" ", res.status);
+    });
+
+    // Setup Streamable HTTP endpoint (POST for requests, DELETE for session termination)
+    http_server_->Post(http_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
+        this->handle_streamable_http(req, res);
+        LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"POST ", req.path, " HTTP/1.1\" ", res.status);
+    });
+
+    http_server_->Delete(http_endpoint_.c_str(), [this](const httplib::Request& req, httplib::Response& res) {
+        std::string session_id = req.get_header_value("Mcp-Session-Id");
+        if (session_id.empty()) {
+            res.status = 400;
+            res.set_content("{\"error\":\"Missing Mcp-Session-Id header\"}", "application/json");
+            return;
+        }
+        close_session(session_id);
+        res.status = 200;
+        res.set_content("Session closed", "text/plain");
+        LOG_INFO(req.remote_addr, ":", req.remote_port, " - \"DELETE ", req.path, " HTTP/1.1\" ", res.status);
     });
     
     // Start resource check thread (only start in non-blocking mode)
@@ -655,6 +675,97 @@ void server::handle_jsonrpc(const httplib::Request& req, httplib::Response& res)
     res.set_content("Accepted", "text/plain");
 }
 
+void server::handle_streamable_http(const httplib::Request& req, httplib::Response& res) {
+    // Setup response headers
+    res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Access-Control-Allow-Methods", "POST, DELETE, OPTIONS");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+
+    // Parse JSON-RPC request
+    json req_json;
+    try {
+        req_json = json::parse(req.body);
+    } catch (const json::exception& e) {
+        LOG_ERROR("Failed to parse JSON request: ", e.what());
+        res.status = 400;
+        res.set_content("{\"error\":\"Invalid JSON\"}", "application/json");
+        return;
+    }
+
+    // Create request object
+    request mcp_req;
+    try {
+        mcp_req.jsonrpc = req_json["jsonrpc"].get<std::string>();
+        if (req_json.contains("id") && !req_json["id"].is_null()) {
+            mcp_req.id = req_json["id"];
+        }
+        mcp_req.method = req_json["method"].get<std::string>();
+        if (req_json.contains("params")) {
+            mcp_req.params = req_json["params"];
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to create request object: ", e.what());
+        res.status = 400;
+        res.set_content("{\"error\":\"Invalid request format\"}", "application/json");
+        return;
+    }
+
+    // Handle initialize request: create session, process synchronously, return with Mcp-Session-Id header
+    if (mcp_req.method == "initialize") {
+        std::string session_id = generate_session_id();
+        LOG_INFO("Streamable HTTP: new session ", session_id);
+
+        // Track session initialization state (reuse existing map)
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            session_initialized_[session_id] = false;
+        }
+
+        json response_json = handle_initialize(mcp_req, session_id);
+
+        res.set_header("Mcp-Session-Id", session_id);
+        res.set_header("Content-Type", "application/json");
+        res.status = 200;
+        res.set_content(response_json.dump(), "application/json");
+        return;
+    }
+
+    // All other requests require a valid Mcp-Session-Id header
+    std::string session_id = req.get_header_value("Mcp-Session-Id");
+    if (session_id.empty()) {
+        res.status = 400;
+        res.set_content("{\"error\":\"Missing Mcp-Session-Id header\"}", "application/json");
+        return;
+    }
+
+    // Check session exists
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (session_initialized_.find(session_id) == session_initialized_.end()) {
+            res.status = 404;
+            res.set_content("{\"error\":\"Session not found\"}", "application/json");
+            return;
+        }
+    }
+
+    // Handle notifications (no id): process asynchronously, return 202
+    if (mcp_req.is_notification()) {
+        thread_pool_.enqueue([this, mcp_req, session_id]() {
+            process_request(mcp_req, session_id);
+        });
+        res.status = 202;
+        res.set_content("Accepted", "text/plain");
+        return;
+    }
+
+    // Handle requests (with id): process synchronously, return JSON response
+    json response_json = process_request(mcp_req, session_id);
+
+    res.set_header("Content-Type", "application/json");
+    res.status = 200;
+    res.set_content(response_json.dump(), "application/json");
+}
+
 json server::process_request(const request& req, const std::string& session_id) {
     // Check if it is a notification
     if (req.is_notification()) {
@@ -755,16 +866,8 @@ json server::handle_initialize(const request& req, const std::string& session_id
     LOG_INFO("Client requested protocol version: ", requested_version);
 
     if (requested_version != MCP_VERSION) {
-        LOG_ERROR("Unsupported protocol version: ", requested_version, ", server supports: ", MCP_VERSION);
-        return response::create_error(
-            req.id, 
-            error_code::invalid_params, 
-            "Unsupported protocol version",
-            {
-                {"supported", {MCP_VERSION}},
-                {"requested", params["protocolVersion"]}
-            }
-        ).to_json();
+        LOG_WARNING("Client requested protocol version ", requested_version,
+                    ", server supports ", MCP_VERSION, ". Responding with supported version.");
     }
 
     // Extract client info
@@ -861,15 +964,19 @@ void server::set_session_initialized(const std::string& session_id, bool initial
         LOG_WARNING("Cannot set initialization state for empty session_id");
         return;
     }
-    
+
     try {
         std::lock_guard<std::mutex> lock(mutex_);
-        // Check if session still exists
+        // Check if session still exists (either SSE or HTTP mode)
         auto it = session_dispatchers_.find(session_id);
-        if (it == session_dispatchers_.end()) {
-            LOG_WARNING("Cannot set initialization state for non-existent session: ", session_id);
-            return;
+        bool has_dispatcher = (it != session_dispatchers_.end());
+
+        // For HTTP mode, we also track initialization in session_initialized_ map
+        // So we allow setting initialized state even without a dispatcher for HTTP sessions
+        if (!has_dispatcher) {
+            LOG_DEBUG("Setting initialization state for HTTP session: ", session_id);
         }
+
         session_initialized_[session_id] = initialized;
     } catch (const std::exception& e) {
         LOG_ERROR("Exception setting session initialization state: ", e.what());

@@ -3,7 +3,7 @@
  * @brief Resource implementation for MCP
  * 
  * This file defines the base resource class and common resource types for the MCP protocol.
- * Follows the 2024-11-05 protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 
 #ifndef MCP_RESOURCE_H
