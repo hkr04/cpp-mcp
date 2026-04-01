@@ -646,6 +646,7 @@ void stdio_client::read_thread_func() {
                             }
                         }
                     } catch (const json::exception& e) {
+                        (e);
                         LOG_INFO("message: ", line);
                     }
                 }
