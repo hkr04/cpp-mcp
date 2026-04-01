@@ -4,7 +4,7 @@
  * 
  * This file implements the client-side functionality for the Model Context Protocol
  * using standard input/output (stdio) as the transport mechanism.
- * Follows the 2024-11-05 protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 
 #ifndef MCP_STDIO_CLIENT_H

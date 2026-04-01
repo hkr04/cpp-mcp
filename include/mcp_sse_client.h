@@ -3,7 +3,7 @@
  * @brief MCP Client implementation
  * 
  * This file implements the client-side functionality for the Model Context Protocol.
- * Follows the 2024-11-05 protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 
 #ifndef MCP_SSE_CLIENT_H

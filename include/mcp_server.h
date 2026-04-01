@@ -1,9 +1,9 @@
 /**
  * @file mcp_server.h
  * @brief MCP Server implementation
- * 
+ *
  * This file implements the server-side functionality for the Model Context Protocol.
- * Follows the 2024-11-05 basic protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 
 #ifndef MCP_SERVER_H
@@ -201,6 +201,9 @@ public:
         /** Message endpoint path */
         std::string msg_endpoint{ "/message" };
 
+        /** Streamable HTTP endpoint path (for "type": "http" in .mcp.json) */
+        std::string http_endpoint{ "/mcp" };
+
         unsigned int threadpool_size{ std::thread::hardware_concurrency() };
 
         #ifdef MCP_SSL        
@@ -352,6 +355,7 @@ private:
     // Server-sent events endpoint
     std::string sse_endpoint_;
     std::string msg_endpoint_;
+    std::string http_endpoint_;
     
     // Method handlers
     std::map<std::string, method_handler> method_handlers_;
@@ -385,6 +389,9 @@ private:
     
     // Handle incoming JSON-RPC requests
     void handle_jsonrpc(const httplib::Request& req, httplib::Response& res);
+
+    // Handle Streamable HTTP requests (POST /mcp)
+    void handle_streamable_http(const httplib::Request& req, httplib::Response& res);
 
     // Send a JSON-RPC message to a client
     void send_jsonrpc(const std::string& session_id, const json& message);

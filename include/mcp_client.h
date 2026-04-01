@@ -3,7 +3,7 @@
  * @brief MCP Client interface
  * 
  * This file defines the interface for the Model Context Protocol clients.
- * Follows the 2024-11-05 protocol specification.
+ * Follows the 2025-03-26 protocol specification.
  */
 
 #ifndef MCP_CLIENT_H
