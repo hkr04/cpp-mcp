@@ -6,7 +6,6 @@
  * Follows the 2024-11-05 protocol specification.
  */
 #include "mcp_resource.h"
-#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -14,8 +13,40 @@
 #include <chrono>
 #include <ctime>
 #include <mutex>
+#include <sys/stat.h>
 
-namespace fs = std::filesystem;
+namespace {
+
+// Polyfills for std::filesystem (unavailable on older GCC/libstdc++)
+bool file_exists(const std::string& path)
+{
+    struct stat st;
+    return ::stat(path.c_str(), &st) == 0;
+}
+
+time_t file_last_write_time(const std::string& path)
+{
+    struct stat st;
+    if (::stat(path.c_str(), &st) != 0) {
+        return 0;
+    }
+    return st.st_mtime;
+}
+
+std::string path_filename(const std::string& path)
+{
+    auto pos = path.find_last_of('/');
+    return (pos == std::string::npos) ? path : path.substr(pos + 1);
+}
+
+std::string path_extension(const std::string& path)
+{
+    auto name = path_filename(path);
+    auto pos = name.rfind('.');
+    return (pos == std::string::npos || pos == 0) ? "" : name.substr(pos);
+}
+
+} // anonymous namespace
 
 namespace mcp {
 
@@ -121,16 +152,16 @@ const std::vector<uint8_t>& binary_resource::get_data() const {
 file_resource::file_resource(const std::string& file_path, 
                            const std::string& mime_type,
                            const std::string& description)
-    : text_resource("file://" + file_path, 
-                   fs::path(file_path).filename().string(),
+    : text_resource("file://" + file_path,
+                   path_filename(file_path),
                    mime_type.empty() ? guess_mime_type(file_path) : mime_type,
                    description),
       file_path_(file_path),
       last_modified_(0) {
     
     // Check if file exists
-    if (!fs::exists(file_path_)) {
-        throw mcp_exception(error_code::invalid_params, 
+    if (!file_exists(file_path_)) {
+        throw mcp_exception(error_code::invalid_params,
                            "File not found: " + file_path_);
     }
 }
@@ -150,7 +181,7 @@ json file_resource::read() const {
     const_cast<file_resource*>(this)->set_text(buffer.str());
     
     // Update last modified time
-    last_modified_ = fs::last_write_time(file_path_).time_since_epoch().count();
+    last_modified_ = file_last_write_time(file_path_);
     
     // Mark as not modified after read
     modified_ = false;
@@ -163,16 +194,16 @@ json file_resource::read() const {
 }
 
 bool file_resource::is_modified() const {
-    if (!fs::exists(file_path_)) {
+    if (!file_exists(file_path_)) {
         return true; // File was deleted
     }
-    
-    time_t current_modified = fs::last_write_time(file_path_).time_since_epoch().count();
+
+    time_t current_modified = file_last_write_time(file_path_);
     return current_modified != last_modified_;
 }
 
 std::string file_resource::guess_mime_type(const std::string& file_path) {
-    std::string ext = fs::path(file_path).extension().string();
+    std::string ext = path_extension(file_path);
     
     // Convert to lowercase
     std::transform(ext.begin(), ext.end(), ext.begin(), 

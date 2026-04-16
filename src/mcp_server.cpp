@@ -7,6 +7,14 @@
  */
 
 #include "mcp_server.h"
+#include <sys/stat.h>
+
+namespace {
+bool file_exists(const std::string& path) {
+    struct stat st;
+    return ::stat(path.c_str(), &st) == 0;
+}
+} // anonymous namespace
 
 namespace mcp {
 
@@ -23,11 +31,11 @@ server::server(const server::configuration& conf)
 {
     #ifdef MCP_SSL
     if (conf.ssl.server_cert_path && conf.ssl.server_private_key_path) {
-        if (!std::filesystem::exists(*conf.ssl.server_cert_path)) {
+        if (!file_exists(*conf.ssl.server_cert_path)) {
             LOG_ERROR("SSL certificate file '", *conf.ssl.server_cert_path, "' not found");
         }
 
-        if (!std::filesystem::exists(*conf.ssl.server_private_key_path)) {
+        if (!file_exists(*conf.ssl.server_private_key_path)) {
             LOG_ERROR("SSL key file '", *conf.ssl.server_private_key_path, "' not found");
         }
 
