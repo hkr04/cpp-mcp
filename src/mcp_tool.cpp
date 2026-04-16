@@ -98,21 +98,27 @@ tool_builder& tool_builder::with_object_param(const std::string& name,
     return *this;
 }
 
+tool_builder& tool_builder::with_annotations(const json& annotations) {
+    annotations_ = annotations;
+    return *this;
+}
+
 tool tool_builder::build() const {
     tool t;
     t.name = name_;
     t.description = description_;
-    
+
     // Create the parameters schema
     json schema = parameters_;
-    schema["type"] = "object";;
-    
+    schema["type"] = "object";
+
     if (!required_params_.empty()) {
         schema["required"] = required_params_;
     }
-    
+
     t.parameters_schema = schema;
-    
+    t.annotations = annotations_;
+
     return t;
 }
 

@@ -24,7 +24,7 @@ namespace mcp {
 // Use the nlohmann json library
 using json = nlohmann::ordered_json;
 
-// MCP version (2025-03-26 is the latest stable version with enhanced capabilities)
+// MCP version
 constexpr const char* MCP_VERSION = "2025-03-26";
 
 // MCP error codes (JSON-RPC 2.0 standard codes)
