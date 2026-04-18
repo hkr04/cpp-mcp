@@ -24,14 +24,19 @@ struct tool {
     std::string name;
     std::string description;
     json parameters_schema;
-    
+    json annotations;  // Optional tool annotations (2025-03-26 spec)
+
     // Convert to JSON for API documentation
     json to_json() const {
-        return {
+        json j = {
             {"name", name},
             {"description", description},
-            {"inputSchema", parameters_schema} // You may need `parameters` instead of `inputSchema` for OAI format
+            {"inputSchema", parameters_schema}
         };
+        if (!annotations.is_null() && !annotations.empty()) {
+            j["annotations"] = annotations;
+        }
+        return j;
     }
 };
 
@@ -117,15 +122,23 @@ public:
                                    bool required = true);
     
     /**
+     * @brief Set tool annotations (2025-03-26 spec)
+     * @param annotations JSON object with annotation hints
+     * @return Reference to this builder
+     */
+    tool_builder& with_annotations(const json& annotations);
+
+    /**
      * @brief Build the tool
      * @return The constructed tool
      */
     tool build() const;
-    
+
 private:
     std::string name_;
     std::string description_;
     json parameters_;
+    json annotations_;
     std::vector<std::string> required_params_;
     
     // Helper to add a parameter of any type

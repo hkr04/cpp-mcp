@@ -16,6 +16,11 @@ add_library(${TARGET} STATIC
     ../include/mcp_sse_client.h
 )
 
+target_compile_definitions(${TARGET} PUBLIC
+    MCP_MAX_SESSIONS=${MCP_MAX_SESSIONS}
+    MCP_SESSION_TIMEOUT=${MCP_SESSION_TIMEOUT}
+)
+
 target_link_libraries(${TARGET} PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 
 # If OpenSSL is found, link the OpenSSL libraries
