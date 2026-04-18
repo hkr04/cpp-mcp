@@ -471,6 +471,7 @@ json sse_client::send_jsonrpc(const request& req) {
     
     httplib::Headers headers;
     headers.emplace("Content-Type", "application/json");
+    headers.emplace("Accept", "application/json, text/event-stream");
     
     for (const auto& [key, value] : default_headers_) {
         headers.emplace(key, value);

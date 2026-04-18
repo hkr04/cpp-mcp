@@ -112,10 +112,10 @@ struct request {
 
     static request from_json(const json& j) {
         request req;
-        req.jsonrpc = j["jsonrpc"].get<std::string>();
-        req.id = j["id"];
-        req.method = j["method"].get<std::string>();
-        req.params = j["params"];
+        req.jsonrpc = j.value("jsonrpc", "2.0");
+        req.id = j.contains("id") ? j["id"] : json(nullptr);
+        req.method = j.value("method", "");
+        req.params = j.contains("params") ? j["params"] : json::object();
         return req;
     }
     
@@ -183,10 +183,10 @@ struct response {
 
     static response from_json(const json& j) {
         response res;
-        res.jsonrpc = j["jsonrpc"].get<std::string>();
-        res.id = j["id"];
-        res.result = j["result"];
-        res.error = j["error"];
+        res.jsonrpc = j.value("jsonrpc", "2.0");
+        res.id = j.contains("id") ? j["id"] : json(nullptr);
+        if (j.contains("result")) res.result = j["result"];
+        if (j.contains("error")) res.error = j["error"];
         return res;
     }
 };

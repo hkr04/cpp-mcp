@@ -68,6 +68,7 @@ bool server::start(bool blocking) {
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
         res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+        res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
         res.status = 204; // No Content
     });
 
@@ -829,6 +830,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
     // Parse JSON body
     json body;
@@ -864,7 +866,12 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     }
 
     // Validate session for non-initialize requests
-    if (!is_initialize && !session_id.empty()) {
+    if (!is_initialize) {
+        if (session_id.empty()) {
+            res.status = 400;
+            res.set_content("{\"error\":\"Missing Mcp-Session-Id header\"}", "application/json");
+            return;
+        }
         std::lock_guard<std::mutex> lock(mutex_);
         if (session_dispatchers_.find(session_id) == session_dispatchers_.end()) {
             // Session expired or invalid — client must re-initialize
@@ -992,6 +999,7 @@ void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res)
     // CORS headers
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
+    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
 
 
     std::string session_id = req.get_header_value("Mcp-Session-Id");
