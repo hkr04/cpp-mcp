@@ -43,13 +43,14 @@ endif()
 
 # Link Google Test and MCP library
 target_link_libraries(${TEST_PROJECT_NAME} PRIVATE
-    gtest
-    gtest_main
-    gmock
-    gmock_main
+    GTest::gtest_main
     mcp
-    Threads::Threads
+    GTest::gmock
 )
+
+if (WIN32)
+    target_link_libraries(${TEST_PROJECT_NAME} PRIVATE ws2_32 wsock32 crypt32)
+endif()
 
 # If OpenSSL is found, link OpenSSL libraries
 if(OPENSSL_FOUND)
