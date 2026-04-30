@@ -170,6 +170,29 @@ int main() {
     server.register_tool(calc_tool, calculator_handler);
     server.register_tool(hello_tool, hello_handler);
     
+    // Register prompt
+    mcp::prompt hello_prompt = mcp::prompt_builder("hello_prompt")
+        .with_description("A prompt to generate a greeting")
+        .with_argument("name", "The name to greet", true)
+        .build();
+
+    server.register_prompt(hello_prompt, [](const mcp::json& args, const std::string& session_id) -> mcp::json {
+        std::string name = "World";
+        if (args.contains("name")) {
+            name = args["name"].get<std::string>();
+        }
+
+        mcp::json message = {
+            {"role", "user"},
+            {"content", {
+                {"type", "text"},
+                {"text", "Please greet " + name + " in a friendly way."}
+            }}
+        };
+
+        return mcp::json::array({message});
+    });
+    
     // // Register resources
     // auto file_resource = std::make_shared<mcp::file_resource>("./Makefile");
     // server.register_resource("file://./Makefile", file_resource);

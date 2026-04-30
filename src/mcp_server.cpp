@@ -551,6 +551,54 @@ void server::register_tool(const tool& tool, tool_handler handler) {
     }
 }
 
+void server::register_prompt(const prompt& prompt, prompt_handler handler) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    prompts_[prompt.name] = std::make_pair(prompt, handler);
+    
+    // Register methods for prompt listing and calling
+    if (method_handlers_.find("prompts/list") == method_handlers_.end()) {
+        method_handlers_["prompts/list"] = [this](const json& params, const std::string& session_id) -> json {
+            json prompts_json = json::array();
+            for (const auto& [name, prompt_pair] : prompts_) {
+                prompts_json.push_back(prompt_pair.first.to_json());
+            }
+            return json{{"prompts", prompts_json}};
+        };
+    }
+    
+    if (method_handlers_.find("prompts/get") == method_handlers_.end()) {
+        method_handlers_["prompts/get"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("name")) {
+                throw mcp_exception(error_code::invalid_params, "Missing 'name' parameter");
+            }
+            
+            std::string prompt_name = params["name"];
+            auto it = prompts_.find(prompt_name);
+            if (it == prompts_.end()) {
+                throw mcp_exception(error_code::invalid_params, "Prompt not found: " + prompt_name);
+            }
+            
+            json prompt_args = params.contains("arguments") ? params["arguments"] : json::object();
+            
+            json handler_result = it->second.second(prompt_args, session_id);
+            
+            // Expected to return a GetPromptResult structure: {"description": "...", "messages": [...]}
+            // If it returns just an array, we can auto-wrap it into messages
+            if (handler_result.is_array()) {
+                json wrapped_result = {
+                    {"messages", handler_result}
+                };
+                if (!it->second.first.description.empty()) {
+                    wrapped_result["description"] = it->second.first.description;
+                }
+                return wrapped_result;
+            }
+            
+            return handler_result;
+        };
+    }
+}
+
 void server::register_session_cleanup(const std::string& key, session_cleanup_handler handler) {
     std::lock_guard<std::mutex> lock(mutex_);
     session_cleanup_handler_[key] = handler;

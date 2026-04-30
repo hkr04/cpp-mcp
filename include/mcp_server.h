@@ -12,6 +12,7 @@
 #include "mcp_message.h"
 #include "mcp_resource.h"
 #include "mcp_tool.h"
+#include "mcp_prompt.h"
 #include "mcp_thread_pool.h"
 #include "mcp_logger.h"
 
@@ -36,6 +37,7 @@ namespace mcp {
 
 using method_handler = std::function<json(const json&, const std::string&)>;
 using tool_handler = method_handler;
+using prompt_handler = method_handler;
 using notification_handler = std::function<void(const json&, const std::string&)>;
 using auth_handler = std::function<bool(const std::string&, const std::string&)>;
 using session_cleanup_handler = std::function<void(const std::string&)>;
@@ -326,6 +328,13 @@ public:
     void register_tool(const tool& tool, tool_handler handler);
 
     /**
+     * @brief Register a prompt
+     * @param prompt The prompt to register
+     * @param handler The function to call when the prompt is invoked
+     */
+    void register_prompt(const prompt& prompt, prompt_handler handler);
+
+    /**
      * @brief Register a session cleanup handler
      * @param key Tool or resource name to be cleaned up
      * @param handler The function to call when the session is closed
@@ -423,6 +432,7 @@ private:
 
     // Tools map (name -> handler)
     std::map<std::string, std::pair<tool, tool_handler>> tools_;
+    std::map<std::string, std::pair<prompt, prompt_handler>> prompts_;
     
     // Authentication handler
     auth_handler auth_handler_;
