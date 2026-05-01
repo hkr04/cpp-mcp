@@ -7,6 +7,7 @@
 - **JSON-RPC 2.0 Communication**: Request/response communication based on JSON-RPC 2.0 standard
 - **Resource Abstraction**: Standard interfaces for resources such as files, APIs, etc.
 - **Tool Registration**: Register and call tools with structured parameters
+- **Prompt Templates**: Register and expose prompt templates to clients for AI workflows
 - **Extensible Architecture**: Easy to extend with new resource types and tools
 - **Multi-Transport Support**: Supports HTTP and standard input/output (stdio) communication methods
 
@@ -85,7 +86,7 @@ Example MCP server implementation with custom tools:
 
 Example MCP client connecting to a server:
 - Get server information
-- List available tools
+- List available tools and prompts
 - Call tools with parameters
 - Access resources
 
@@ -155,6 +156,26 @@ server.register_tool(hello_tool, hello_handler);
 // Register resources
 auto file_resource = std::make_shared<mcp::file_resource>("<file_path>");
 server.register_resource("file://<file_path>", file_resource);
+
+// Register prompts
+mcp::prompt draft_prompt = mcp::prompt_builder("draft_article")
+        .with_description("Draft a new article")
+        .with_argument("topic", "The main topic to write about", true)
+        .build();
+
+server.register_prompt(draft_prompt, [](const mcp::json& args, const std::string /* session_id */) -> mcp::json {
+    std::string topic = args.value("topic", "Unknown");
+    std::string instruction = "Please write an article about " + topic;
+    
+    // Return messages array as specified in the MCP protocol
+    return mcp::json::array({{
+        {"role", "user"},
+        {"content", {
+            {"type", "text"},
+            {"text", instruction}
+        }}
+    }});
+});
 
 // Start the server
 server.start(true);  // Blocking mode
