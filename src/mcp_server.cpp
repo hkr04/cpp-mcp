@@ -55,6 +55,67 @@ server::~server() {
     stop();
 }
 
+void server::start_stdio() {
+    running_ = true;
+    std::string line;
+    std::string session_id = "stdio_session_" + std::to_string(std::time(nullptr));
+    
+    while (std::getline(std::cin, line)) {
+        if (line.empty()) continue;
+        try {
+            json req_json = json::parse(line);
+            request req;
+            
+            if (req_json.is_object() && req_json.contains("jsonrpc") && req_json["jsonrpc"] == "2.0") {
+                req.jsonrpc = "2.0";
+                if (req_json.contains("id")) {
+                    req.id = req_json["id"];
+                } else {
+                    req.id = nullptr;
+                }
+                req.method = req_json.value("method", "");
+                if (req_json.contains("params")) {
+                    req.params = req_json["params"];
+                }
+                
+                json res = process_request(req, session_id);
+                if (!res.is_null() && !req.id.is_null()) {
+                    std::cout << res.dump() << "\n" << std::flush;
+                } else {
+                    std::cerr << "Response is null or ID is null. Method: " << req.method << std::endl;
+                    if (!res.is_null()) {
+                        std::cout << res.dump() << "\n" << std::flush;
+                    }
+                }
+            } else {
+                json err_res = {
+                    {"jsonrpc", "2.0"},
+                    {"error", {
+                        {"code", static_cast<int>(error_code::invalid_request)},
+                        {"message", "Invalid JSON-RPC format"}
+                    }}
+                };
+                if (req_json.contains("id")) {
+                    err_res["id"] = req_json["id"];
+                } else {
+                    err_res["id"] = nullptr;
+                }
+                std::cout << err_res.dump() << "\n" << std::flush;
+            }
+        } catch (const std::exception& e) {
+            json err_res = {
+                {"jsonrpc", "2.0"},
+                {"error", {
+                    {"code", static_cast<int>(error_code::parse_error)},
+                    {"message", std::string("Parse error: ") + e.what()}
+                }},
+                {"id", nullptr}
+            };
+            std::cout << err_res.dump() << "\n" << std::flush;
+        }
+    }
+    running_ = false;
+}
 
 bool server::start(bool blocking) {
     if (running_) {
@@ -547,6 +608,54 @@ void server::register_tool(const tool& tool, tool_handler handler) {
             }
 
             return tool_result;
+        };
+    }
+}
+
+void server::register_prompt(const prompt& prompt, prompt_handler handler) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    prompts_[prompt.name] = std::make_pair(prompt, handler);
+    
+    // Register methods for prompt listing and calling
+    if (method_handlers_.find("prompts/list") == method_handlers_.end()) {
+        method_handlers_["prompts/list"] = [this](const json& params, const std::string& session_id) -> json {
+            json prompts_json = json::array();
+            for (const auto& [name, prompt_pair] : prompts_) {
+                prompts_json.push_back(prompt_pair.first.to_json());
+            }
+            return json{{"prompts", prompts_json}};
+        };
+    }
+    
+    if (method_handlers_.find("prompts/get") == method_handlers_.end()) {
+        method_handlers_["prompts/get"] = [this](const json& params, const std::string& session_id) -> json {
+            if (!params.contains("name")) {
+                throw mcp_exception(error_code::invalid_params, "Missing 'name' parameter");
+            }
+            
+            std::string prompt_name = params["name"];
+            auto it = prompts_.find(prompt_name);
+            if (it == prompts_.end()) {
+                throw mcp_exception(error_code::invalid_params, "Prompt not found: " + prompt_name);
+            }
+            
+            json prompt_args = params.contains("arguments") ? params["arguments"] : json::object();
+            
+            json handler_result = it->second.second(prompt_args, session_id);
+            
+            // Expected to return a GetPromptResult structure: {"description": "...", "messages": [...]}
+            // If it returns just an array, we can auto-wrap it into messages
+            if (handler_result.is_array()) {
+                json wrapped_result = {
+                    {"messages", handler_result}
+                };
+                if (!it->second.first.description.empty()) {
+                    wrapped_result["description"] = it->second.first.description;
+                }
+                return wrapped_result;
+            }
+            
+            return handler_result;
         };
     }
 }
