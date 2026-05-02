@@ -1,9 +1,10 @@
 /**
- * @file server_example.cpp
- * @brief Server example based on MCP protocol
+ * @file stdio_server_example.cpp
+ * @brief Server example based on MCP protocol using Standard I/O transport
  * 
- * This example demonstrates how to create an MCP server, register tools and resources,
- * and handle client requests. Follows the 2024-11-05 basic protocol specification.
+ * This example demonstrates how to create an MCP server that communicates
+ * over standard input (stdin) and standard output (stdout).
+ * Follows the 2024-11-05 basic protocol specification.
  */
 #include "mcp_server.h"
 #include "mcp_tool.h"
@@ -122,20 +123,12 @@ int main() {
     
     // Create and configure server
     mcp::server::configuration srv_conf;
-    srv_conf.host = "localhost";
-    srv_conf.port = 8888;
-    // srv_conf.threadpool_size = 1;
-    // srv_conf.ssl.server_cert_path = "./server.cert.pem";
-    // srv_conf.ssl.server_private_key_path = "./server.key.pem";
-
+    // Note: host and port are ignored in stdio mode
+    
     mcp::server server(srv_conf);
-    server.set_server_info("ExampleServer", "1.0.0");
+    server.set_server_info("StdioExampleServer", "1.0.0");
     
     // Set server capabilities
-    // mcp::json capabilities = {
-    //     {"tools", {{"listChanged", true}}},
-    //     {"resources", {{"subscribe", false}, {"listChanged", true}}}
-    // };
     mcp::json capabilities = {
         {"tools", mcp::json::object()},
         {"prompts", mcp::json::object()}
@@ -199,9 +192,12 @@ int main() {
     // server.register_resource("file://./Makefile", file_resource);
     
     // Start server
-    std::cout << "Starting MCP server at " << srv_conf.host << ":" << srv_conf.port << std::endl;
-    std::cout << "Press Ctrl+C to stop the server" << std::endl;
-    server.start(true);  // Blocking mode
+    // CRITICAL: We use std::cerr here to output logs, because any output to std::cout
+    // will corrupt the JSON-RPC pipe and crash the MCP client!
+    std::cerr << "Starting MCP server in STDIO mode..." << std::endl;
+    std::cerr << "Awaiting JSON-RPC requests on stdin..." << std::endl;
+    
+    server.start_stdio();
     
     return 0;
 }

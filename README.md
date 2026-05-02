@@ -76,11 +76,16 @@ Implements MCP server functionality.
 
 ### HTTP Server Example (`examples/server_example.cpp`)
 
-Example MCP server implementation with custom tools:
+Example MCP server implementation over HTTP/SSE with custom tools:
 - Time tool: Get the current time
 - Calculator tool: Perform mathematical operations
 - Echo tool: Echo input with optional transformations (to uppercase, reverse)
 - Greeting tool: Returns `Hello, `+ input name + `!`, defaults to `Hello, World!`
+
+### Stdio Server Example (`examples/stdio_server_example.cpp`)
+
+Example MCP server implementation over standard input/output (stdio), which is the default transport method for MCP clients like Claude Desktop, Cursor, and OpenCode.
+It implements the same core tools but uses `server.start_stdio()` to communicate via pipes instead of opening an HTTP port.
 
 ### HTTP Client Example (`examples/client_example.cpp`)
 

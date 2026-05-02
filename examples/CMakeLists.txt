@@ -30,3 +30,8 @@ target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/include)
 if(OPENSSL_FOUND)
     target_link_libraries(${TARGET} PRIVATE ${OPENSSL_LIBRARIES})
 endif()
+
+set(TARGET stdio_server_example)
+add_executable(${TARGET} stdio_server_example.cpp)
+target_link_libraries(${TARGET} PRIVATE mcp)
+target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR}/include)
