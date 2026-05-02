@@ -243,11 +243,18 @@ public:
     ~server();
     
     /**
-     * @brief Start the server
-     * @param blocking If true, this call blocks until the server stops
+     * @brief Start the server (HTTP/SSE)
+     * @param blocking Whether to block the current thread
      * @return True if the server started successfully
      */
     bool start(bool blocking = true);
+    
+    /**
+     * @brief Start the server using stdio transport
+     * Reads JSON-RPC messages from stdin and writes responses to stdout.
+     * Blocks the current thread until stdin is closed.
+     */
+    void start_stdio();
     
     /**
      * @brief Stop the server
