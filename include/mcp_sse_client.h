@@ -234,8 +234,8 @@ private:
     // Condition variable, used to wait for message endpoint setting
     std::condition_variable endpoint_cv_;
     
-    // Request ID to Promise mapping, used for asynchronous waiting for responses
-    std::map<json, std::promise<json>> pending_requests_;
+    // Request ID to Promise mapping (using string key for type consistency)
+    std::map<std::string, std::promise<json>> pending_requests_;
     
     // Response processing mutex
     std::mutex response_mutex_;
