@@ -67,8 +67,8 @@ bool server::start(bool blocking) {
     http_server_->Options(".*", [](const httplib::Request& req, httplib::Response& res) {
         res.set_header("Access-Control-Allow-Origin", "*");
         res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-        res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
-        res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
+        res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version");
+        res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
         res.status = 204; // No Content
     });
 
@@ -829,8 +829,9 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     // CORS headers
     res.set_header("Access-Control-Allow-Origin", "*");
     res.set_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
-    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("MCP-Protocol-Version", MCP_VERSION);
 
     // Parse JSON body
     json body;
@@ -998,8 +999,9 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
 void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res) {
     // CORS headers
     res.set_header("Access-Control-Allow-Origin", "*");
-    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id");
-    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("MCP-Protocol-Version", MCP_VERSION);
 
 
     std::string session_id = req.get_header_value("Mcp-Session-Id");
@@ -1033,18 +1035,37 @@ void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res)
     res.set_header("Cache-Control", "no-cache");
     res.set_header("Connection", "keep-alive");
 
+    auto sent_initial = std::make_shared<std::atomic<bool>>(false);
+
     // Use chunked content provider — same pattern as legacy SSE
     res.set_chunked_content_provider(
         "text/event-stream",
-        [this, session_id, dispatcher](size_t, httplib::DataSink& sink) {
+        [this, session_id, dispatcher, sent_initial](size_t, httplib::DataSink& sink) {
             try {
                 if (dispatcher->is_closed() || !running_) {
                     return false;
                 }
+
+                if (!sent_initial->exchange(true, std::memory_order_acq_rel)) {
+                    static constexpr const char* kInitialComment = ": connected\r\n\r\n";
+                    if (!sink.write(kInitialComment, sizeof(": connected\r\n\r\n") - 1)) {
+                        return false;
+                    }
+                }
+
                 dispatcher->update_activity();
                 bool result = dispatcher->wait_event(&sink);
                 if (!result) {
-                    return false;
+                    if (dispatcher->is_closed() || !running_) {
+                        return false;
+                    }
+
+                    static constexpr const char* kHeartbeatComment = ": heartbeat\r\n\r\n";
+                    if (!sink.write(kHeartbeatComment, sizeof(": heartbeat\r\n\r\n") - 1)) {
+                        return false;
+                    }
+                    dispatcher->update_activity();
+                    return true;
                 }
                 dispatcher->update_activity();
                 return true;
@@ -1056,6 +1077,9 @@ void server::handle_mcp_get(const httplib::Request& req, httplib::Response& res)
 
 void server::handle_mcp_delete(const httplib::Request& req, httplib::Response& res) {
     res.set_header("Access-Control-Allow-Origin", "*");
+    res.set_header("Access-Control-Allow-Headers", "Content-Type, Accept, Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
+    res.set_header("MCP-Protocol-Version", MCP_VERSION);
 
     std::string session_id = req.get_header_value("Mcp-Session-Id");
     if (session_id.empty()) {
