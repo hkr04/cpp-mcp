@@ -38,7 +38,7 @@ using method_handler = std::function<json(const json&, const std::string&)>;
 using tool_handler = method_handler;
 using notification_handler = std::function<void(const json&, const std::string&)>;
 using auth_handler = std::function<bool(const std::string&, const std::string&)>;
-using session_cleanup_handler = std::function<void(const std::string&)>;
+using session_cleanup_handler = std::function<void(const std::string& key, const std::string& session_id)>;
 
 class event_dispatcher {
 public:
