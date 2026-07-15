@@ -14,6 +14,7 @@
 #include <io.h>
 #else
 #include <unistd.h>
+#include <cstdlib>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <fcntl.h>
@@ -360,8 +361,8 @@ bool stdio_client::start_server_process() {
         // Set environment variables
         if (!env_vars_.empty()) {
             for (const auto& [key, value] : env_vars_.items()) {
-                std::string env_var = key + "=" + convert_to_string(value);
-                if (putenv(const_cast<char*>(env_var.c_str())) != 0) {
+                std::string env_var_value = convert_to_string(value);
+                if (setenv(key.c_str(), env_var_value.c_str(), 1) != 0) {
                     LOG_ERROR("Failed to set environment variable: ", key);
                 }
             }
