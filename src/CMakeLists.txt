@@ -23,6 +23,10 @@ target_compile_definitions(${TARGET} PUBLIC
 
 target_link_libraries(${TARGET} PUBLIC ${CMAKE_THREAD_LIBS_INIT})
 
+if(WIN32)
+    target_link_libraries(${TARGET} PUBLIC ws2_32 wsock32)
+endif()
+
 # If OpenSSL is found, link the OpenSSL libraries
 if(OPENSSL_FOUND)
     target_link_libraries(${TARGET} PUBLIC ${OPENSSL_LIBRARIES})

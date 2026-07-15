@@ -11,7 +11,11 @@
 #include "mcp_client.h"
 #include "mcp_server.h"
 #include "mcp_tool.h"
+#include "mcp_prompt.h"
 #include "mcp_sse_client.h"
+
+#include <vector>
+#include <sstream>
 
 using namespace mcp;
 using json = nlohmann::ordered_json;
@@ -662,6 +666,114 @@ TEST_F(ToolsTest, CallTool) {
     EXPECT_EQ(tool_result["content"][0]["text"], "Current weather in New York:\nTemperature: 72°F\nConditions: Partly cloudy");
 }
 
+class PromptsEnvironment : public ::testing::Environment {
+public:
+    void SetUp() override {
+        // Set up test environment
+        server::configuration conf = {.host = "localhost", .port = 8084};
+        server_ = std::make_unique<server>(conf);
+        
+        // Create a test prompt
+        prompt test_prompt = prompt_builder("test_prompt")
+            .with_description("A test prompt")
+            .with_argument("name", "The user name", true)
+            .build();
+        
+        // Register prompt
+        server_->register_prompt(test_prompt, [](const json& params, const std::string& /* session_id */) -> json {
+            std::string name = "World";
+            if (params.contains("name")) {
+                name = params["name"].get<std::string>();
+            }
+            
+            return json::array({
+                {
+                    {"role", "user"},
+                    {"content", {
+                        {"type", "text"},
+                        {"text", "Hello, " + name + "!"}
+                    }}
+                }
+            });
+        });
+        
+        // Start server in background thread
+        server_thread_ = std::thread([this]() {
+            server_->start();
+        });
+        
+        // Wait for server to start
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        
+        // Connect client
+        client_ = std::make_unique<sse_client>("http://localhost:8084");
+        bool initialized = client_->initialize("TestClient", "1.0");
+        EXPECT_TRUE(initialized);
+    }
+
+    void TearDown() override {
+        if (client_) {
+            client_.reset();
+        }
+        if (server_) {
+            server_->stop();
+        }
+        if (server_thread_.joinable()) {
+            server_thread_.join();
+        }
+    }
+
+    static std::shared_ptr<sse_client>& GetClient() {
+        return client_;
+    }
+
+private:
+    std::unique_ptr<server> server_;
+    std::thread server_thread_;
+    static std::shared_ptr<sse_client> client_;
+};
+
+std::shared_ptr<sse_client> PromptsEnvironment::client_ = nullptr;
+
+class PromptsTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        client_ = PromptsEnvironment::GetClient().get();
+    }
+
+    sse_client* client_;
+};
+
+// Test listing prompts
+TEST_F(PromptsTest, ListPrompts) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Call list prompts method directly
+    json prompts_list = client_->send_request("prompts/list").result;
+    
+    // Verify prompts list
+    EXPECT_TRUE(prompts_list.contains("prompts"));
+    EXPECT_EQ(prompts_list["prompts"].size(), 1);
+    EXPECT_EQ(prompts_list["prompts"][0]["name"], "test_prompt");
+    EXPECT_EQ(prompts_list["prompts"][0]["description"], "A test prompt");
+    EXPECT_TRUE(prompts_list["prompts"][0].contains("arguments"));
+    EXPECT_EQ(prompts_list["prompts"][0]["arguments"][0]["name"], "name");
+}
+
+// Test getting prompt
+TEST_F(PromptsTest, GetPrompt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    
+    // Get prompt
+    json prompt_result = client_->send_request("prompts/get", {{"name", "test_prompt"}, {"arguments", {{"name", "Alice"}}}}).result;
+    
+    // Verify prompt result
+    EXPECT_TRUE(prompt_result.contains("messages"));
+    EXPECT_EQ(prompt_result["messages"].size(), 1);
+    EXPECT_EQ(prompt_result["messages"][0]["role"], "user");
+    EXPECT_EQ(prompt_result["messages"][0]["content"]["text"], "Hello, Alice!");
+}
+
 int main(int argc, char **argv) {
     ::testing::InitGoogleTest(&argc, argv);
     
@@ -670,6 +782,100 @@ int main(int argc, char **argv) {
     ::testing::AddGlobalTestEnvironment(new VersioningEnvironment());
     ::testing::AddGlobalTestEnvironment(new PingEnvironment());
     ::testing::AddGlobalTestEnvironment(new ToolsEnvironment());
+    ::testing::AddGlobalTestEnvironment(new PromptsEnvironment());
     
     return RUN_ALL_TESTS();
 } 
+// Test Stdio Transport
+class StdioTransportTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Prepare original buffers
+        orig_cin = std::cin.rdbuf();
+        orig_cout = std::cout.rdbuf();
+    }
+
+    void TearDown() override {
+        // Restore buffers
+        std::cin.rdbuf(orig_cin);
+        std::cout.rdbuf(orig_cout);
+    }
+    
+    std::streambuf* orig_cin;
+    std::streambuf* orig_cout;
+};
+
+TEST_F(StdioTransportTest, StartStdioProcessing) {
+    mcp::server::configuration srv_conf;
+    mcp::server server(srv_conf);
+    
+    // Register tool
+    mcp::tool echo_tool = mcp::tool_builder("echo")
+        .with_description("Echo tool")
+        .with_string_param("text", "Text to echo", true)
+        .build();
+    
+    server.register_tool(echo_tool, [](const mcp::json& params, const std::string&) -> mcp::json {
+        return {
+            {
+                {"type", "text"},
+                {"text", params["text"]}
+            }
+        };
+    });
+
+    // Simulate input sequence
+    // 1. Initialize request
+    std::string init_req = "{\"jsonrpc\": \"2.0\", \"id\": 0, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2025-03-26\", \"capabilities\": {}, \"clientInfo\": {\"name\": \"test_client\", \"version\": \"1.0\"}}}\n";
+    // 2. Initialized notification
+    std::string init_notif = "{\"jsonrpc\": \"2.0\", \"method\": \"notifications/initialized\"}\n";
+    // 3. Tool call request
+    std::string mock_input = "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"echo\", \"arguments\": {\"text\": \"hello stdio test\"}}}\n";
+    
+    std::istringstream in_stream(init_req + init_notif + mock_input);
+    std::ostringstream out_stream;
+
+    std::cin.rdbuf(in_stream.rdbuf());
+    std::cout.rdbuf(out_stream.rdbuf());
+
+    // Run processing
+    // It should process the lines, then exit when EOF is reached
+    server.start_stdio();
+
+    // Verify output
+    std::string raw_output = out_stream.str();
+    ASSERT_FALSE(raw_output.empty());
+    
+    // Collect all non-empty JSON lines from stdout
+    std::istringstream output_stream(raw_output);
+    std::string line;
+    std::vector<json> responses;
+    while (std::getline(output_stream, line)) {
+        if (line.empty()) continue;
+        try {
+            responses.push_back(json::parse(line));
+        } catch (...) {
+            continue;
+        }
+    }
+    
+    // Verify we have at least the init response and tool call response
+    ASSERT_GE(responses.size(), 2);
+    
+    // Find the tool call response (id=1)
+    bool found_tool_result = false;
+    bool found_init_result = false;
+    for (const auto& resp : responses) {
+        if (resp.contains("id") && resp["id"] == 0 && resp.contains("result")) {
+            found_init_result = true;
+        }
+        if (resp.contains("id") && resp["id"] == 1 && resp.contains("result")) {
+            EXPECT_EQ(resp["jsonrpc"], "2.0");
+            EXPECT_EQ(resp["result"]["content"][0]["text"], "hello stdio test");
+            found_tool_result = true;
+        }
+    }
+    
+    EXPECT_TRUE(found_init_result) << "Missing initialize response";
+    EXPECT_TRUE(found_tool_result) << "Missing tools/call response";
+}

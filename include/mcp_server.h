@@ -12,6 +12,7 @@
 #include "mcp_message.h"
 #include "mcp_resource.h"
 #include "mcp_tool.h"
+#include "mcp_prompt.h"
 #include "mcp_thread_pool.h"
 #include "mcp_logger.h"
 
@@ -36,6 +37,7 @@ namespace mcp {
 
 using method_handler = std::function<json(const json&, const std::string&)>;
 using tool_handler = method_handler;
+using prompt_handler = method_handler;
 using notification_handler = std::function<void(const json&, const std::string&)>;
 using auth_handler = std::function<bool(const std::string&, const std::string&)>;
 using session_cleanup_handler = std::function<void(const std::string&)>;
@@ -241,11 +243,18 @@ public:
     ~server();
     
     /**
-     * @brief Start the server
-     * @param blocking If true, this call blocks until the server stops
+     * @brief Start the server (HTTP/SSE)
+     * @param blocking Whether to block the current thread
      * @return True if the server started successfully
      */
     bool start(bool blocking = true);
+    
+    /**
+     * @brief Start the server using stdio transport
+     * Reads JSON-RPC messages from stdin and writes responses to stdout.
+     * Blocks the current thread until stdin is closed.
+     */
+    void start_stdio();
     
     /**
      * @brief Stop the server
@@ -324,6 +333,13 @@ public:
      * @param handler The function to call when the tool is invoked
      */
     void register_tool(const tool& tool, tool_handler handler);
+
+    /**
+     * @brief Register a prompt
+     * @param prompt The prompt to register
+     * @param handler The function to call when the prompt is invoked
+     */
+    void register_prompt(const prompt& prompt, prompt_handler handler);
 
     /**
      * @brief Register a session cleanup handler
@@ -423,6 +439,7 @@ private:
 
     // Tools map (name -> handler)
     std::map<std::string, std::pair<tool, tool_handler>> tools_;
+    std::map<std::string, std::pair<prompt, prompt_handler>> prompts_;
     
     // Authentication handler
     auth_handler auth_handler_;
