@@ -1532,7 +1532,7 @@ void server::close_session(const std::string& session_id) {
      // Clean up resources safely
     try {
         for (const auto& [key, handler] : session_cleanup_handler_) {
-            handler(key);
+            handler(key, session_id);
         }
 
         // Copy resources to be processed
