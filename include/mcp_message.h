@@ -123,7 +123,7 @@ private:
     // Generate a unique ID
     static json generate_id() {
         static int next_id = 1;
-        return next_id++;
+        return json(next_id++);  // Explicitly create json to ensure type consistency
     }
 };
 
