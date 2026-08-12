@@ -24,6 +24,7 @@
 #include <vector>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <thread>
 #include <functional>
 #include <chrono>
@@ -44,9 +45,7 @@ using session_cleanup_handler = std::function<void(const std::string&)>;
 
 class event_dispatcher {
 public:
-    event_dispatcher() {
-        message_.reserve(128); // Pre-allocate space for messages
-    }
+    event_dispatcher() = default;
     
     ~event_dispatcher() {
         close();
@@ -65,10 +64,8 @@ public:
                 return false;
             }
 
-            int id = id_.load(std::memory_order_relaxed);
-
             bool result = cv_.wait_for(lk, timeout, [&] {
-                return cid_.load(std::memory_order_relaxed) == id || closed_.load(std::memory_order_acquire);
+                return !messages_.empty() || closed_.load(std::memory_order_acquire);
             });
 
             if (closed_.load(std::memory_order_acquire)) {
@@ -76,15 +73,15 @@ public:
             }
 
             if (!result) {
-                return false;
+                // Idle timeout: keep the SSE stream open (long-running tools may be quiet).
+                return true;
             }
 
-            // Only copy the message if there is one
-            if (!message_.empty()) {
-                message_copy.swap(message_);
-            } else {
-                return true; // No message but condition satisfied
+            if (messages_.empty()) {
+                return true;
             }
+            message_copy = std::move(messages_.front());
+            messages_.pop();
         }
 
         try {
@@ -112,15 +109,13 @@ public:
             if (closed_.load(std::memory_order_acquire)) {
                 return false;
             }
-            
-            // Efficiently set the message and allocate space as needed
-            if (message.size() > message_.capacity()) {
-                message_.reserve(message.size() + 64); // Pre-allocate extra space to avoid frequent reallocations
+
+            static constexpr size_t kMaxQueued = 512;
+            while (messages_.size() >= kMaxQueued) {
+                messages_.pop();
             }
-            message_ = message;
-            
-            cid_.store(id_.fetch_add(1, std::memory_order_relaxed), std::memory_order_relaxed);
-            cv_.notify_one(); // Notify waiting threads
+            messages_.push(message);
+            cv_.notify_one();
             return true;
         } catch (...) {
             return false;
@@ -159,9 +154,7 @@ public:
 private:
     mutable std::mutex m_;
     std::condition_variable cv_;
-    std::atomic<int> id_{0};
-    std::atomic<int> cid_{-1};
-    std::string message_;
+    std::queue<std::string> messages_;
     std::atomic<bool> closed_{false};
     std::chrono::steady_clock::time_point last_activity_{std::chrono::steady_clock::now()};
 };
