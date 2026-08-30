@@ -138,26 +138,26 @@ int main() {
     // Register tools
     mcp::tool time_tool = mcp::tool_builder("get_time")
         .with_description("Get current time")
-        .build();
+        ->build();
     
     mcp::tool echo_tool = mcp::tool_builder("echo")
         .with_description("Echo input with optional transformations")
-        .with_string_param("text", "Text to echo")
-        .with_boolean_param("uppercase", "Convert to uppercase", false)
-        .with_boolean_param("reverse", "Reverse the text", false)
-        .build();
+        ->with_string_param("text", "Text to echo")
+        ->with_boolean_param("uppercase", "Convert to uppercase", false)
+        ->with_boolean_param("reverse", "Reverse the text", false)
+        ->build();
     
     mcp::tool calc_tool = mcp::tool_builder("calculator")
         .with_description("Perform basic calculations")
-        .with_string_param("operation", "Operation to perform (add, subtract, multiply, divide)")
-        .with_number_param("a", "First operand")
-        .with_number_param("b", "Second operand")
-        .build();
+        ->with_string_param("operation", "Operation to perform (add, subtract, multiply, divide)")
+        ->with_number_param("a", "First operand")
+        ->with_number_param("b", "Second operand")
+        ->build();
 
     mcp::tool hello_tool = mcp::tool_builder("hello")
         .with_description("Say hello")
-        .with_string_param("name", "Name to say hello to", "World")
-        .build();
+        ->with_string_param("name", "Name to say hello to", "World")
+        ->build();
     
     server.register_tool(time_tool, get_time_handler);
     server.register_tool(echo_tool, echo_handler);

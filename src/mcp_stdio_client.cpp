@@ -281,7 +281,8 @@ bool stdio_client::start_server_process() {
         }
     }
 
-    std::string cmd_line = "cmd.exe /c " + command_;
+    std::string cmd_line("cmd.exe /c ");
+    cmd_line += command_;
 
     char* cmd_line_ptr = _strdup(cmd_line.c_str());
     
@@ -823,14 +824,14 @@ json stdio_client::send_jsonrpc(const request& req) {
     
     // Wait for response, set timeout
     const auto timeout = std::chrono::seconds(60);
-    auto status = response_future.wait_for(timeout);
+    std::future_status status = response_future.wait_for(timeout);
     
     if (status == std::future_status::ready) {
         json response = response_future.get();
         
         if (response.contains("isError") && response["isError"].is_boolean() && response["isError"].get<bool>()) {
             if (response.contains("error") && response["error"].is_object()) {
-                const auto& err_obj = response["error"];
+                const json& err_obj = response["error"];
                 int code = err_obj.contains("code") ? err_obj["code"].get<int>() : static_cast<int>(error_code::internal_error);
                 std::string message = err_obj.value("message", "");
                 // Handle error

@@ -13,7 +13,21 @@
 
 ## How to Build
 
-Example of building with CMake:
+This fork builds with `build.py`, a plain Python driver that calls `g++` or
+`clang++` directly and produces a shared library. No CMake required:
+
+```bash
+./build.py                     # build/libmcp.so
+./build.py --examples          # also build the example programs
+./build.py --ssl               # OpenSSL support
+./build.py --compiler clang++ --debug -j 8
+./build.py --help              # every option
+```
+
+See [CRUST.md](CRUST.md) for the ongoing port to the Crust C++ subset,
+which is why several idioms in this fork are written the way they are.
+
+The upstream CMake build still works. Example of building with CMake:
 ```bash
 cmake -B build
 cmake --build build --config Release

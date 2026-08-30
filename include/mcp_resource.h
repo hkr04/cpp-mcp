@@ -20,6 +20,24 @@
 namespace mcp {
 
 /**
+ * @brief A resource-change callback: a function pointer and its context
+ *
+ * A plain function pointer rather than `std::function`. A `std::function`
+ * stores a callable, and the callable one naturally writes for a callback
+ * is a capturing lambda -- which is inlined at its call sites and so has no
+ * value to store. The `context` pointer carries whatever a capture would
+ * have carried, which is the same thing every C callback API does.
+ */
+typedef void (*resource_changed_fn)(void* context, const std::string& uri);
+
+/** @brief One subscription: which URI, and what to call. */
+struct subscription {
+    std::string uri;
+    resource_changed_fn fn;
+    void* context;
+};
+
+/**
  * @class resource
  * @brief Base class for MCP resources
  * 
@@ -71,7 +89,12 @@ public:
      * @param mime_type The MIME type of the resource
      * @param description Optional description of the resource
      */
-    text_resource(const std::string& uri, 
+    /* `uri` is taken by value rather than by reference so that a derived
+       class can hand it a *computed* URI from its own initializer list.
+       A reference parameter lowers to a pointer, and there is no address
+       to take of a value that was just built; a by-value parameter is
+       constructed at the call, which is exactly what is wanted here. */
+    text_resource(std::string uri, 
                  const std::string& name, 
                  const std::string& mime_type,
                  const std::string& description = "");
@@ -205,6 +228,19 @@ public:
     file_resource(const std::string& file_path, 
                  const std::string& mime_type = "",
                  const std::string& description = "");
+
+    /**
+     * @brief Create a file_resource, checking that the file exists
+     *
+     * The existence check lives here rather than in the constructor. A
+     * constructor has no return value to report a failure through, and a
+     * partially-built object is what a throw from one leaves behind -- so
+     * the fallible work is done first and the object built only once it
+     * has succeeded.
+     */
+    static std::shared_ptr<file_resource> create(const std::string& file_path,
+                                                 const std::string& mime_type,
+                                                 const std::string& description);
     
     /**
      * @brief Read the resource content
@@ -228,6 +264,12 @@ private:
      * @return The guessed MIME type
      */
     static std::string guess_mime_type(const std::string& file_path);
+
+    /* Builds `file://<path>` as a named value. Written out rather than
+       concatenated in the initializer list: `"file://" + file_path` there
+       is an operator result with no address, and an initializer list has
+       no statement position to hoist a local into. */
+    static std::string make_file_uri(const std::string& file_path);
 };
 
 /**
@@ -274,10 +316,12 @@ public:
     /**
      * @brief Subscribe to resource changes
      * @param uri The URI of the resource to subscribe to
-     * @param callback The callback function to call when the resource changes
+     * @param callback Called when the resource changes
+     * @param context Passed back to the callback untouched
      * @return Subscription ID
      */
-    int subscribe(const std::string& uri, std::function<void(const std::string&)> callback);
+    int subscribe(const std::string& uri, resource_changed_fn callback,
+                  void* context);
     
     /**
      * @brief Unsubscribe from resource changes
@@ -300,7 +344,7 @@ private:
     resource_manager& operator=(const resource_manager&) = delete;
     
     std::map<std::string, std::shared_ptr<resource>> resources_;
-    std::map<int, std::pair<std::string, std::function<void(const std::string&)>>> subscriptions_;
+    std::map<int, subscription> subscriptions_;
     int next_subscription_id_ = 1;
 };
 

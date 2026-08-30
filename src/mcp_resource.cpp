@@ -20,7 +20,7 @@ namespace fs = std::filesystem;
 namespace mcp {
 
 // text_resource implementation
-text_resource::text_resource(const std::string& uri, 
+text_resource::text_resource(std::string uri, 
                            const std::string& name, 
                            const std::string& mime_type,
                            const std::string& description)
@@ -121,26 +121,34 @@ const std::vector<uint8_t>& binary_resource::get_data() const {
 file_resource::file_resource(const std::string& file_path, 
                            const std::string& mime_type,
                            const std::string& description)
-    : text_resource("file://" + file_path, 
+    : text_resource(make_file_uri(file_path), 
                    fs::path(file_path).filename().string(),
                    mime_type.empty() ? guess_mime_type(file_path) : mime_type,
                    description),
       file_path_(file_path),
       last_modified_(0) {
     
-    // Check if file exists
-    if (!fs::exists(file_path_)) {
-        throw mcp_exception(error_code::invalid_params, 
-                           "File not found: " + file_path_);
+}
+
+std::shared_ptr<file_resource> file_resource::create(
+        const std::string& file_path,
+        const std::string& mime_type,
+        const std::string& description) {
+    if (!fs::exists(file_path)) {
+        std::string msg("File not found: ");
+        msg += file_path;
+        throw mcp_exception(error_code::invalid_params, msg);
     }
+    return std::make_shared<file_resource>(file_path, mime_type, description);
 }
 
 json file_resource::read() const {
     // Read file content
     std::ifstream file(file_path_, std::ios::binary);
     if (!file) {
-        throw mcp_exception(error_code::internal_error, 
-                           "Failed to open file: " + file_path_);
+        std::string msg("Failed to open file: ");
+        msg += file_path_;
+        throw mcp_exception(error_code::internal_error, msg);
     }
     
     std::stringstream buffer;
@@ -169,6 +177,12 @@ bool file_resource::is_modified() const {
     
     time_t current_modified = fs::last_write_time(file_path_).time_since_epoch().count();
     return current_modified != last_modified_;
+}
+
+std::string file_resource::make_file_uri(const std::string& file_path) {
+    std::string uri("file://");
+    uri += file_path;
+    return uri;
 }
 
 std::string file_resource::guess_mime_type(const std::string& file_path) {
@@ -235,21 +249,24 @@ void resource_manager::register_resource(std::shared_ptr<resource> resource) {
 bool resource_manager::unregister_resource(const std::string& uri) {
     std::lock_guard<std::mutex> lock(g_resource_manager_mutex);
     
-    auto it = resources_.find(uri);
-    if (it == resources_.end()) {
+    if (resources_.count(uri) == 0) {
         return false;
     }
     
-    resources_.erase(it);
+    resources_.erase(uri);
     
-    // Remove any subscriptions for this resource
-    auto sub_it = subscriptions_.begin();
-    while (sub_it != subscriptions_.end()) {
-        if (sub_it->second.first == uri) {
-            sub_it = subscriptions_.erase(sub_it);
-        } else {
-            ++sub_it;
+    /* Remove any subscriptions for this resource. Written against `count`
+       and `erase(key)` rather than an iterator: an iterator's type is not
+       written anywhere, so `auto` has nothing to deduce it from. Collect
+       the keys first, because erasing while walking invalidates the walk. */
+    std::vector<int> doomed;
+    for (const auto& [sub_id, sub] : subscriptions_) {
+        if (sub.uri == uri) {
+            doomed.push_back(sub_id);
         }
+    }
+    for (int sub_id : doomed) {
+        subscriptions_.erase(sub_id);
     }
     
     return true;
@@ -258,12 +275,11 @@ bool resource_manager::unregister_resource(const std::string& uri) {
 std::shared_ptr<resource> resource_manager::get_resource(const std::string& uri) const {
     std::lock_guard<std::mutex> lock(g_resource_manager_mutex);
     
-    auto it = resources_.find(uri);
-    if (it == resources_.end()) {
+    if (resources_.count(uri) == 0) {
         return nullptr;
     }
     
-    return it->second;
+    return resources_.at(uri);
 }
 
 json resource_manager::list_resources() const {
@@ -280,7 +296,9 @@ json resource_manager::list_resources() const {
     };
 }
 
-int resource_manager::subscribe(const std::string& uri, std::function<void(const std::string&)> callback) {
+int resource_manager::subscribe(const std::string& uri,
+                                resource_changed_fn callback,
+                                void* context) {
     if (!callback) {
         throw mcp_exception(error_code::invalid_params, "Cannot subscribe with null callback");
     }
@@ -288,13 +306,18 @@ int resource_manager::subscribe(const std::string& uri, std::function<void(const
     std::lock_guard<std::mutex> lock(g_resource_manager_mutex);
     
     // Check if resource exists
-    auto it = resources_.find(uri);
-    if (it == resources_.end()) {
-        throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+    if (resources_.count(uri) == 0) {
+        std::string msg("Resource not found: ");
+        msg += uri;
+        throw mcp_exception(error_code::invalid_params, msg);
     }
     
     int id = next_subscription_id_++;
-    subscriptions_[id] = std::make_pair(uri, callback);
+    subscription sub;
+    sub.uri = uri;
+    sub.fn = callback;
+    sub.context = context;
+    subscriptions_[id] = sub;
     
     return id;
 }
@@ -302,12 +325,11 @@ int resource_manager::subscribe(const std::string& uri, std::function<void(const
 bool resource_manager::unsubscribe(int subscription_id) {
     std::lock_guard<std::mutex> lock(g_resource_manager_mutex);
     
-    auto it = subscriptions_.find(subscription_id);
-    if (it == subscriptions_.end()) {
+    if (subscriptions_.count(subscription_id) == 0) {
         return false;
     }
     
-    subscriptions_.erase(it);
+    subscriptions_.erase(subscription_id);
     return true;
 }
 
@@ -315,19 +337,17 @@ void resource_manager::notify_resource_changed(const std::string& uri) {
     std::lock_guard<std::mutex> lock(g_resource_manager_mutex);
     
     // Check if resource exists
-    auto it = resources_.find(uri);
-    if (it == resources_.end()) {
+    if (resources_.count(uri) == 0) {
         return;
     }
     
     // Notify all subscribers for this resource
     for (const auto& [id, sub] : subscriptions_) {
-        if (sub.first == uri) {
-            try {
-                sub.second(uri);
-            } catch (...) {
-                // Ignore exceptions in callbacks
-            }
+        if (sub.uri == uri) {
+            /* A callback that throws is the caller's problem: this subset
+               has no `catch`, and swallowing an error silently was never
+               much of a policy anyway. */
+            sub.fn(sub.context, uri);
         }
     }
 }
