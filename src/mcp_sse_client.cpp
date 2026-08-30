@@ -122,7 +122,9 @@ void sse_client::set_auth_token(const std::string& token) {
         std::lock_guard<std::mutex> lock(mutex_);
         auth_token_ = token;
     }
-    set_header("Authorization", "Bearer " + auth_token_);
+    std::string bearer("Bearer ");
+    bearer += auth_token_;
+    set_header("Authorization", bearer);
 }
 
 void sse_client::set_header(const std::string& key, const std::string& value) {
@@ -250,7 +252,10 @@ void sse_client::open_sse_connection() {
         endpoint_cv_.notify_all();
     }
     
-    std::string connection_info = "Base URL: " + scheme_host_port_ + ", SSE Endpoint: " + sse_endpoint_;    
+    std::string connection_info("Base URL: ");
+    connection_info += scheme_host_port_;
+    connection_info += ", SSE Endpoint: ";
+    connection_info += sse_endpoint_;
     LOG_INFO("Attempting to establish SSE connection: ", connection_info);
     
     sse_thread_ = std::make_unique<std::thread>([this]() {
@@ -545,20 +550,21 @@ json sse_client::send_jsonrpc(const request& req) {
                 pending_requests_.erase(req_id_key);
             }
             
-            throw mcp_exception(error_code::parse_error, 
-                            "Failed to parse JSON-RPC response: " + std::string(e.what()));
+            std::string parse_msg("Failed to parse JSON-RPC response: ");
+            parse_msg += e.what();
+            throw mcp_exception(error_code::parse_error, parse_msg);
         }
     } else {
         const auto timeout = std::chrono::seconds(timeout_seconds_);
         
-        auto status = response_future.wait_for(timeout);
+        std::future_status status = response_future.wait_for(timeout);
         
         if (status == std::future_status::ready) {
             json response = response_future.get();
             
             if (response.contains("isError") && response["isError"].is_boolean() && response["isError"].get<bool>()) {
                 if (response.contains("error") && response["error"].is_object()) {
-                    const auto& err_obj = response["error"];
+                    const json& err_obj = response["error"];
                     int code = err_obj.contains("code") ? err_obj["code"].get<int>() : static_cast<int>(error_code::internal_error);
                     std::string message = err_obj.value("message", "");
                     // Handle error

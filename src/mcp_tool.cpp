@@ -17,14 +17,14 @@ tool_builder::tool_builder(const std::string& name)
     : name_(name) {
 }
 
-tool_builder& tool_builder::with_description(const std::string& description) {
+tool_builder* tool_builder::with_description(const std::string& description) {
     description_ = description;
-    return *this;
+    return this;
 }
 
-tool_builder& tool_builder::add_param(const std::string& name, 
+tool_builder* tool_builder::add_param(const std::string& name, 
                                      const std::string& description, 
-                                     const std::string& type, 
+                                     std::string type, 
                                      bool required) {
     json param = {
         {"type", type},
@@ -37,30 +37,30 @@ tool_builder& tool_builder::add_param(const std::string& name,
         required_params_.push_back(name);
     }
     
-    return *this;
+    return this;
 }
 
-tool_builder& tool_builder::with_string_param(const std::string& name, 
+tool_builder* tool_builder::with_string_param(const std::string& name, 
                                              const std::string& description, 
                                              bool required) {
     return add_param(name, description, "string", required);
 }
 
-tool_builder& tool_builder::with_number_param(const std::string& name, 
+tool_builder* tool_builder::with_number_param(const std::string& name, 
                                              const std::string& description, 
                                              bool required) {
     return add_param(name, description, "number", required);
 }
 
-tool_builder& tool_builder::with_boolean_param(const std::string& name, 
+tool_builder* tool_builder::with_boolean_param(const std::string& name, 
                                               const std::string& description, 
                                               bool required) {
     return add_param(name, description, "boolean", required);
 }
 
-tool_builder& tool_builder::with_array_param(const std::string& name, 
+tool_builder* tool_builder::with_array_param(const std::string& name, 
                                             const std::string& description,
-                                            const std::string& item_type,
+                                            std::string item_type,
                                             bool required) {
     json param = {
         {"type", "array"},
@@ -76,10 +76,10 @@ tool_builder& tool_builder::with_array_param(const std::string& name,
         required_params_.push_back(name);
     }
     
-    return *this;
+    return this;
 }
 
-tool_builder& tool_builder::with_object_param(const std::string& name, 
+tool_builder* tool_builder::with_object_param(const std::string& name, 
                                              const std::string& description,
                                              const json& properties,
                                              bool required) {
@@ -95,12 +95,12 @@ tool_builder& tool_builder::with_object_param(const std::string& name,
         required_params_.push_back(name);
     }
     
-    return *this;
+    return this;
 }
 
-tool_builder& tool_builder::with_annotations(const json& annotations) {
+tool_builder* tool_builder::with_annotations(const json& annotations) {
     annotations_ = annotations;
-    return *this;
+    return this;
 }
 
 tool tool_builder::build() const {

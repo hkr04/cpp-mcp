@@ -58,7 +58,8 @@ server::~server() {
 void server::start_stdio() {
     running_ = true;
     std::string line;
-    std::string session_id = "stdio_session_" + std::to_string(std::time(nullptr));
+    std::string session_id("stdio_session_");
+    session_id += std::to_string(std::time(nullptr));
     
     while (std::getline(std::cin, line)) {
         if (line.empty()) continue;
@@ -275,7 +276,7 @@ void server::stop() {
     // Wait for threads to finish outside the lock (with timeout limit)
     const auto timeout_point = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     
-    for (auto& thread : threads_to_join) {
+    for (std::unique_ptr<std::thread>& thread : threads_to_join) {
         if (!thread || !thread->joinable()) {
             continue;
         }
@@ -433,7 +434,7 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
             }
 
             // Try resource templates
-            for (const auto& tmpl : resource_templates_) {
+            for (const resource_template_entry& tmpl : resource_templates_) {
                 std::map<std::string, std::string> uri_params;
                 if (match_uri_template(tmpl.uri_template, uri, uri_params)) {
                     json result = tmpl.handler(uri, uri_params, session_id);
@@ -443,7 +444,9 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
                 }
             }
 
-            throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            std::string msg("Resource not found: ");
+            msg += uri;
+            throw mcp_exception(error_code::invalid_params, msg);
         };
     }
     
@@ -476,7 +479,9 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
             std::string uri = params["uri"];
             auto it = resources_.find(uri);
             if (it == resources_.end()) {
-                throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+                std::string msg("Resource not found: ");
+                msg += uri;
+                throw mcp_exception(error_code::invalid_params, msg);
             }
             
             return json::object();
@@ -486,7 +491,7 @@ void server::register_resource(const std::string& path, std::shared_ptr<resource
     if (method_handlers_.find("resources/templates/list") == method_handlers_.end()) {
         method_handlers_["resources/templates/list"] = [this](const json& params, const std::string& session_id) -> json {
             json templates_json = json::array();
-            for (const auto& tmpl : resource_templates_) {
+            for (const resource_template_entry& tmpl : resource_templates_) {
                 templates_json.push_back({
                     {"uriTemplate", tmpl.uri_template},
                     {"name", tmpl.name},
@@ -525,7 +530,7 @@ void server::register_resource_template(
                 contents.push_back(it->second->read());
                 return json{{"contents", contents}};
             }
-            for (const auto& tmpl : resource_templates_) {
+            for (const resource_template_entry& tmpl : resource_templates_) {
                 std::map<std::string, std::string> uri_params;
                 if (match_uri_template(tmpl.uri_template, uri, uri_params)) {
                     json result = tmpl.handler(uri, uri_params, session_id);
@@ -534,14 +539,16 @@ void server::register_resource_template(
                     return json{{"contents", contents}};
                 }
             }
-            throw mcp_exception(error_code::invalid_params, "Resource not found: " + uri);
+            std::string msg("Resource not found: ");
+            msg += uri;
+            throw mcp_exception(error_code::invalid_params, msg);
         };
     }
 
     if (method_handlers_.find("resources/templates/list") == method_handlers_.end()) {
         method_handlers_["resources/templates/list"] = [this](const json& /*params*/, const std::string& /*session_id*/) -> json {
             json templates_json = json::array();
-            for (const auto& tmpl : resource_templates_) {
+            for (const resource_template_entry& tmpl : resource_templates_) {
                 templates_json.push_back({
                     {"uriTemplate", tmpl.uri_template},
                     {"name", tmpl.name},
@@ -578,7 +585,9 @@ void server::register_tool(const tool& tool, tool_handler handler) {
             std::string tool_name = params["name"];
             auto it = tools_.find(tool_name);
             if (it == tools_.end()) {
-                throw mcp_exception(error_code::invalid_params, "Tool not found: " + tool_name);
+                std::string msg("Tool not found: ");
+                msg += tool_name;
+                throw mcp_exception(error_code::invalid_params, msg);
             }
             
             json tool_args = params.contains("arguments") ? params["arguments"] : json::array();
@@ -587,7 +596,9 @@ void server::register_tool(const tool& tool, tool_handler handler) {
                 try {
                     tool_args = json::parse(tool_args.get<std::string>());
                 } catch (const json::exception& e) {
-                    throw mcp_exception(error_code::invalid_params, "Invalid JSON arguments: " + std::string(e.what()));
+                    std::string msg("Invalid JSON arguments: ");
+                    msg += e.what();
+                    throw mcp_exception(error_code::invalid_params, msg);
                 }
             }
 
@@ -636,7 +647,9 @@ void server::register_prompt(const prompt& prompt, prompt_handler handler) {
             std::string prompt_name = params["name"];
             auto it = prompts_.find(prompt_name);
             if (it == prompts_.end()) {
-                throw mcp_exception(error_code::invalid_params, "Prompt not found: " + prompt_name);
+                std::string msg("Prompt not found: ");
+                msg += prompt_name;
+                throw mcp_exception(error_code::invalid_params, msg);
             }
             
             json prompt_args = params.contains("arguments") ? params["arguments"] : json::object();
@@ -694,7 +707,9 @@ void server::handle_sse(const httplib::Request& req, httplib::Response& res) {
     }
 
     std::string session_id = generate_session_id();
-    std::string session_uri = msg_endpoint_ + "?session_id=" + session_id;
+    std::string session_uri(msg_endpoint_);
+    session_uri += "?session_id=";
+    session_uri += session_id;
     
     // Setup SSE response headers
     res.set_header("Content-Type", "text/event-stream");
@@ -703,7 +718,7 @@ void server::handle_sse(const httplib::Request& req, httplib::Response& res) {
     res.set_header("Access-Control-Allow-Origin", "*");
     
     // Create session-specific event dispatcher
-    auto session_dispatcher = std::make_shared<event_dispatcher>();
+    std::shared_ptr<event_dispatcher> session_dispatcher = std::make_shared<event_dispatcher>();
     
     // Initialize activity time
     session_dispatcher->update_activity();
@@ -994,7 +1009,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     // Handle batched requests
     std::vector<json> items;
     if (body.is_array()) {
-        for (const auto& item : body) {
+        for (const json& item : body) {
             items.push_back(item);
         }
     } else {
@@ -1004,7 +1019,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     // Categorize: are there any requests (with id), or only notifications/responses?
     bool has_requests = false;
     bool all_notifications_or_responses = true;
-    for (const auto& item : items) {
+    for (const json& item : items) {
         if (item.contains("method") && item.contains("id") && !item["id"].is_null()) {
             has_requests = true;
             all_notifications_or_responses = false;
@@ -1013,8 +1028,8 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
 
     // If all notifications/responses, process and return 202
     if (all_notifications_or_responses && !has_requests) {
-        for (const auto& item : items) {
-            auto mcp_req = parse_jsonrpc_message(item);
+        for (const json& item : items) {
+            request mcp_req = parse_jsonrpc_message(item);
             if (!session_id.empty()) {
                 process_request(mcp_req, session_id);
             }
@@ -1039,14 +1054,14 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
         session_id = generate_session_id();
 
         // Create session dispatcher for server-push via GET
-        auto session_dispatcher = std::make_shared<event_dispatcher>();
+        std::shared_ptr<event_dispatcher> session_dispatcher = std::make_shared<event_dispatcher>();
         session_dispatcher->update_activity();
         {
             std::lock_guard<std::mutex> lock(mutex_);
             session_dispatchers_[session_id] = session_dispatcher;
         }
 
-        auto mcp_req = parse_jsonrpc_message(items[0]);
+        request mcp_req = parse_jsonrpc_message(items[0]);
         json result = handle_initialize(mcp_req, session_id);
 
         res.set_header("Mcp-Session-Id", session_id);
@@ -1061,8 +1076,8 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
 
     // Process all items, collect responses for requests
     json responses = json::array();
-    for (const auto& item : items) {
-        auto mcp_req = parse_jsonrpc_message(item);
+    for (const json& item : items) {
+        request mcp_req = parse_jsonrpc_message(item);
 
         if (mcp_req.is_notification()) {
             // Fire-and-forget
@@ -1088,8 +1103,10 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
         res.set_header("Content-Type", "text/event-stream");
         res.set_header("Cache-Control", "no-cache");
         std::string sse_body;
-        for (const auto& r : responses) {
-            sse_body += "event: message\r\ndata: " + r.dump() + "\r\n\r\n";
+        for (const json& r : responses) {
+            sse_body += "event: message\r\ndata: ";
+            sse_body += r.dump();
+            sse_body += "\r\n\r\n";
         }
         res.set_content(sse_body, "text/event-stream");
         return;
@@ -1259,10 +1276,12 @@ json server::process_request(const request& req, const std::string& session_id) 
         
         // Method not found
         LOG_WARNING("Method not found: ", req.method);
+        std::string method_msg("Method not found: ");
+        method_msg += req.method;
         return response::create_error(
             req.id,
             error_code::method_not_found,
-            "Method not found: " + req.method
+            method_msg
         ).to_json();
     } catch (const mcp_exception& e) {
         // MCP exception
@@ -1275,10 +1294,12 @@ json server::process_request(const request& req, const std::string& session_id) 
     } catch (const std::exception& e) {
         // Other exceptions
         LOG_ERROR("Exception while processing request: ", e.what());
+        std::string internal_msg("Internal error: ");
+        internal_msg += e.what();
         return response::create_error(
             req.id,
             error_code::internal_error,
-            "Internal error: " + std::string(e.what())
+            internal_msg
         ).to_json();
     } catch (...) {
         // Unknown exception
@@ -1401,7 +1422,7 @@ void server::broadcast_notification(const request& notification) {
             }
         }
     }
-    for (const auto& sid : sessions) {
+    for (const std::string& sid : sessions) {
         try {
             send_jsonrpc(sid, notification.to_json());
         } catch (...) {
