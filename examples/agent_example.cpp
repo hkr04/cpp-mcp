@@ -281,10 +281,10 @@ int main(int argc, char* argv[]) {
 
     mcp::tool calc_tool = mcp::tool_builder("calculator")
         .with_description("Perform basic calculations")
-        .with_string_param("operation", "Operation to perform (add, subtract, multiply, divide)")
-        .with_number_param("a", "First operand")
-        .with_number_param("b", "Second operand")
-        .build();
+        ->with_string_param("operation", "Operation to perform (add, subtract, multiply, divide)")
+        ->with_number_param("a", "First operand")
+        ->with_number_param("b", "Second operand")
+        ->build();
 
     server.register_tool(calc_tool, calculator_handler);
 
