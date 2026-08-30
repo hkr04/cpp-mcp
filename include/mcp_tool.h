@@ -60,7 +60,7 @@ public:
      * @param description The description
      * @return Reference to this builder
      */
-    tool_builder& with_description(const std::string& description);
+    tool_builder* with_description(const std::string& description);
     
     /**
      * @brief Add a string parameter
@@ -69,7 +69,7 @@ public:
      * @param required Whether the parameter is required
      * @return Reference to this builder
      */
-    tool_builder& with_string_param(const std::string& name, 
+    tool_builder* with_string_param(const std::string& name, 
                                    const std::string& description, 
                                    bool required = true);
     
@@ -80,7 +80,7 @@ public:
      * @param required Whether the parameter is required
      * @return Reference to this builder
      */
-    tool_builder& with_number_param(const std::string& name, 
+    tool_builder* with_number_param(const std::string& name, 
                                    const std::string& description, 
                                    bool required = true);
     
@@ -91,7 +91,7 @@ public:
      * @param required Whether the parameter is required
      * @return Reference to this builder
      */
-    tool_builder& with_boolean_param(const std::string& name, 
+    tool_builder* with_boolean_param(const std::string& name, 
                                     const std::string& description, 
                                     bool required = true);
     
@@ -103,9 +103,9 @@ public:
      * @param required Whether the parameter is required
      * @return Reference to this builder
      */
-    tool_builder& with_array_param(const std::string& name, 
+    tool_builder* with_array_param(const std::string& name, 
                                   const std::string& description,
-                                  const std::string& item_type,
+                                  std::string item_type,
                                   bool required = true);
     
     /**
@@ -116,7 +116,7 @@ public:
      * @param required Whether the parameter is required
      * @return Reference to this builder
      */
-    tool_builder& with_object_param(const std::string& name, 
+    tool_builder* with_object_param(const std::string& name, 
                                    const std::string& description,
                                    const json& properties,
                                    bool required = true);
@@ -126,7 +126,7 @@ public:
      * @param annotations JSON object with annotation hints
      * @return Reference to this builder
      */
-    tool_builder& with_annotations(const json& annotations);
+    tool_builder* with_annotations(const json& annotations);
 
     /**
      * @brief Build the tool
@@ -142,9 +142,9 @@ private:
     std::vector<std::string> required_params_;
     
     // Helper to add a parameter of any type
-    tool_builder& add_param(const std::string& name, 
+    tool_builder* add_param(const std::string& name, 
                            const std::string& description, 
-                           const std::string& type, 
+                           std::string type, 
                            bool required);
 };
 

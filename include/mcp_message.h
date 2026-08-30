@@ -38,11 +38,33 @@ enum class error_code {
     server_error_end = -32099       // Server error end
 };
 
+/* The base of `mcp_exception`.
+ *
+ * Under g++ this is `std::runtime_error`, so `catch (const std::exception &)`
+ * still sees an `mcp_exception` -- which matters, because a user tool
+ * handler may throw one and the handler around it catches by that base.
+ *
+ * The C++ subset has no `<stdexcept>`, and a base has to be a class defined
+ * above the one deriving from it (a base is laid out as the first member,
+ * so it must be complete). Under `-D MCP_CRUST` it is therefore a small
+ * class of our own carrying the same two members the code actually uses:
+ * the message and `what()`. */
+#ifdef MCP_CRUST
+class mcp_error_base {
+public:
+    std::string msg_;
+    mcp_error_base(const std::string& message) { msg_ = message; }
+    const char* what() const { return msg_.c_str(); }
+};
+#else
+typedef std::runtime_error mcp_error_base;
+#endif
+
 // MCP exception class
-class mcp_exception : public std::runtime_error {
+class mcp_exception : public mcp_error_base {
 public:
     mcp_exception(error_code code, const std::string& message)
-        : std::runtime_error(message), code_(code) {}
+        : mcp_error_base(message), code_(code) {}
 
     error_code code() const { return code_; }
 
@@ -82,7 +104,8 @@ struct request {
         request req;
         req.jsonrpc = "2.0";
         req.id = nullptr;
-        req.method = "notifications/" + method;
+        req.method = "notifications/";
+        req.method += method;
         req.params = params;
         return req;
     }
