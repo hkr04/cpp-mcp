@@ -65,8 +65,13 @@ void server::start_stdio() {
         try {
             json req_json = json::parse(line);
             request req;
+            const bool valid_id = req_json.is_object() && req_json.contains("id") &&
+                (req_json["id"].is_string() || req_json["id"].is_number_integer());
             
-            if (req_json.is_object() && req_json.contains("jsonrpc") && req_json["jsonrpc"] == "2.0") {
+            if (req_json.is_object() && req_json.contains("jsonrpc") && req_json["jsonrpc"] == "2.0" &&
+                req_json.contains("method") && req_json["method"].is_string() &&
+                (!req_json.contains("id") || valid_id) &&
+                (!req_json.contains("params") || req_json["params"].is_object())) {
                 req.jsonrpc = "2.0";
                 if (req_json.contains("id")) {
                     req.id = req_json["id"];
@@ -90,7 +95,7 @@ void server::start_stdio() {
                         {"message", "Invalid JSON-RPC format"}
                     }}
                 };
-                if (req_json.contains("id")) {
+                if (valid_id) {
                     err_res["id"] = req_json["id"];
                 } else {
                     err_res["id"] = nullptr;
