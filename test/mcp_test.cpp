@@ -805,6 +805,43 @@ protected:
     std::streambuf* orig_cout;
 };
 
+TEST_F(StdioTransportTest, NotificationsProduceNoOutput) {
+    for (const std::string& method : {"ping", "unknown_method", "notifications/initialized"}) {
+        mcp::server::configuration srv_conf;
+        mcp::server server(srv_conf);
+        json notification = {{"jsonrpc", "2.0"}, {"method", method}};
+        std::istringstream in_stream(notification.dump() + "\n");
+        std::ostringstream out_stream;
+
+        std::cin.rdbuf(in_stream.rdbuf());
+        std::cout.rdbuf(out_stream.rdbuf());
+        server.start_stdio();
+        std::cin.rdbuf(orig_cin);
+        std::cout.rdbuf(orig_cout);
+
+        EXPECT_TRUE(out_stream.str().empty()) << "Notification method: " << method;
+    }
+}
+
+TEST_F(StdioTransportTest, IdentifiedPingProducesResponse) {
+    mcp::server::configuration srv_conf;
+    mcp::server server(srv_conf);
+    std::istringstream in_stream("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+    std::ostringstream out_stream;
+
+    std::cin.rdbuf(in_stream.rdbuf());
+    std::cout.rdbuf(out_stream.rdbuf());
+    server.start_stdio();
+    std::cin.rdbuf(orig_cin);
+    std::cout.rdbuf(orig_cout);
+
+    json response = json::parse(out_stream.str());
+    EXPECT_EQ(response.size(), 3);
+    EXPECT_EQ(response["jsonrpc"], "2.0");
+    EXPECT_EQ(response["id"], 1);
+    EXPECT_EQ(response["result"], json::object());
+}
+
 TEST_F(StdioTransportTest, StartStdioProcessing) {
     mcp::server::configuration srv_conf;
     mcp::server server(srv_conf);
@@ -859,8 +896,8 @@ TEST_F(StdioTransportTest, StartStdioProcessing) {
         }
     }
     
-    // Verify we have at least the init response and tool call response
-    ASSERT_GE(responses.size(), 2);
+    // Verify we have only the init response and tool call response
+    EXPECT_EQ(responses.size(), 2);
     
     // Find the tool call response (id=1)
     bool found_tool_result = false;

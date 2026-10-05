@@ -79,13 +79,8 @@ void server::start_stdio() {
                 }
                 
                 json res = process_request(req, session_id);
-                if (!res.is_null() && !req.id.is_null()) {
+                if (!req.is_notification() && !res.is_null()) {
                     std::cout << res.dump() << "\n" << std::flush;
-                } else {
-                    std::cerr << "Response is null or ID is null. Method: " << req.method << std::endl;
-                    if (!res.is_null()) {
-                        std::cout << res.dump() << "\n" << std::flush;
-                    }
                 }
             } else {
                 json err_res = {
