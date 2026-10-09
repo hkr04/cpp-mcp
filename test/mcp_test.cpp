@@ -14,10 +14,13 @@
 #include "mcp_prompt.h"
 #include "mcp_sse_client.h"
 
-#include <vector>
-#include <sstream>
+#include <atomic>
 #include <chrono>
+#include <memory>
+#include <sstream>
+#include <string>
 #include <thread>
+#include <vector>
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -971,6 +974,55 @@ private:
     int port_{0};
 };
 
+// Bind an ephemeral loopback port and release it so the server can listen there.
+int ephemeral_loopback_port() {
+#ifdef _WIN32
+    WSADATA wsa_data;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+        return 0;
+    }
+    SOCKET sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        WSACleanup();
+        return 0;
+    }
+#else
+    int sock = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+        return 0;
+    }
+#endif
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+    if (::bind(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+#ifdef _WIN32
+        ::closesocket(sock);
+        WSACleanup();
+#else
+        ::close(sock);
+#endif
+        return 0;
+    }
+#ifdef _WIN32
+    int addr_len = static_cast<int>(sizeof(addr));
+#else
+    socklen_t addr_len = sizeof(addr);
+#endif
+    int port = 0;
+    if (::getsockname(sock, reinterpret_cast<sockaddr*>(&addr), &addr_len) == 0) {
+        port = ntohs(addr.sin_port);
+    }
+#ifdef _WIN32
+    ::closesocket(sock);
+    WSACleanup();
+#else
+    ::close(sock);
+#endif
+    return port;
+}
+
 } // namespace
 
 // Regression for https://github.com/hkr04/cpp-mcp/issues/57:
@@ -1004,6 +1056,93 @@ TEST(ServerLifecycle, NonBlockingStartStop) {
     server server(conf);
     ASSERT_TRUE(server.start(false));
     EXPECT_TRUE(server.is_running());
+    const auto started = std::chrono::steady_clock::now();
     server.stop();
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    EXPECT_FALSE(server.is_running());
+    // The maintenance thread waits up to 10s. stop() has to wake that wait
+    // (issue #15); a join that ignores the condition variable fails this bound.
+    EXPECT_LT(elapsed, std::chrono::seconds(2));
+}
+
+// Regression for https://github.com/hkr04/cpp-mcp/issues/56 and
+// https://github.com/hkr04/cpp-mcp/issues/15: an open legacy SSE session must
+// be closed on stop(), cleanup handlers must run, and stop() must return
+// without the old detach/join-helper (which use-after-frees) or the 5s/10s
+// heartbeat and wait_event sleeps.
+TEST(ServerLifecycle, StopClosesActiveSseSessionPromptly) {
+    const int port = ephemeral_loopback_port();
+    ASSERT_GT(port, 0);
+
+    server::configuration conf;
+    conf.host = "127.0.0.1";
+    conf.port = port;
+    conf.threadpool_size = 1;
+    conf.session_timeout = 0;
+
+    std::atomic<int> cleanups{0};
+    server server(conf);
+    server.register_session_cleanup("session", [&](const std::string& key) {
+        if (key == "session") {
+            cleanups.fetch_add(1, std::memory_order_relaxed);
+        }
+    });
+
+    ASSERT_TRUE(server.start(false)) << "port " << port;
+    ASSERT_TRUE(server.is_running());
+
+    auto client = std::make_shared<httplib::Client>("127.0.0.1", port);
+    client->set_connection_timeout(2, 0);
+    client->set_read_timeout(3, 0);
+
+    std::atomic<bool> saw_endpoint{false};
+    std::thread reader([client, &saw_endpoint]() {
+        std::string body;
+        client->Get("/sse", [&](const char* data, size_t len) {
+            body.append(data, len);
+            if (body.find("event: endpoint") != std::string::npos) {
+                saw_endpoint.store(true, std::memory_order_release);
+            }
+            return true;
+        });
+    });
+    struct reader_join {
+        std::thread& thread;
+        httplib::Client& client;
+        ~reader_join() {
+            client.stop();
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+    } join{reader, *client};
+
+    const auto endpoint_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!saw_endpoint.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < endpoint_deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    ASSERT_TRUE(saw_endpoint.load(std::memory_order_acquire))
+        << "SSE endpoint event was not delivered";
+
+    const auto stop_started = std::chrono::steady_clock::now();
+    server.stop();
+    const auto stop_elapsed = std::chrono::steady_clock::now() - stop_started;
+
+    EXPECT_FALSE(server.is_running());
+    EXPECT_EQ(cleanups.load(std::memory_order_relaxed), 1);
+    // Heartbeat idle is 5s and wait_event idle is 10s. A correct stop wakes
+    // both and joins them; either sleep failing to wake blows this budget.
+    EXPECT_LT(stop_elapsed, std::chrono::seconds(2));
+
+    const auto second_stop = std::chrono::steady_clock::now();
+    server.stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - second_stop, std::chrono::seconds(2));
+
+    ASSERT_TRUE(server.start(false)) << "restart on port " << port;
+    EXPECT_TRUE(server.is_running());
+    const auto restart_stop = std::chrono::steady_clock::now();
+    server.stop();
+    EXPECT_LT(std::chrono::steady_clock::now() - restart_stop, std::chrono::seconds(2));
     EXPECT_FALSE(server.is_running());
 }

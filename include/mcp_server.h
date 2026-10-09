@@ -98,6 +98,16 @@ public:
         }
     }
 
+    // Returns true when the dispatcher was closed before the timeout elapsed.
+    // close() wakes this wait, so callers can join instead of sleeping.
+    template <typename Rep, typename Period>
+    bool wait_for_close(const std::chrono::duration<Rep, Period>& timeout) {
+        std::unique_lock<std::mutex> lk(m_);
+        return cv_.wait_for(lk, timeout, [this] {
+            return closed_.load(std::memory_order_acquire);
+        });
+    }
+
     bool send_event(const std::string& message) {
         if (closed_.load(std::memory_order_acquire) || message.empty()) {
             return false;
@@ -115,7 +125,10 @@ public:
                 messages_.pop();
             }
             messages_.push(message);
-            cv_.notify_one();
+            // Heartbeat threads also wait on cv_. notify_all so a message
+            // cannot be stranded by waking the heartbeat waiter instead of
+            // wait_event().
+            cv_.notify_all();
             return true;
         } catch (...) {
             return false;
@@ -123,12 +136,13 @@ public:
     }
     
     void close() {
-        bool was_closed = closed_.exchange(true, std::memory_order_release);
-        if (was_closed) {
-            return;
-        }
-        
         try {
+            // Set the flag and notify while holding m_ so a waiter cannot
+            // miss the wakeup between its predicate check and wait().
+            std::lock_guard<std::mutex> lk(m_);
+            if (closed_.exchange(true, std::memory_order_release)) {
+                return;
+            }
             cv_.notify_all();
         } catch (...) {
             // Ignore exceptions
@@ -400,6 +414,14 @@ private:
     // SSE thread
     std::map<std::string, std::unique_ptr<std::thread>> sse_threads_;
 
+    // Heartbeat threads that have entered their thread function and not yet
+    // exited. stop() waits for this to drain so a thread that already detached
+    // itself cannot touch the server after stop() returns.
+    std::atomic<int> active_sse_threads_{0};
+    std::mutex sse_done_mutex_;
+    std::condition_variable sse_done_cv_;
+    std::atomic<bool> stop_in_progress_{false};
+
     // Event dispatcher for server-sent events
     event_dispatcher sse_dispatcher_;
     
@@ -522,6 +544,14 @@ private:
 
     // Close session
     void close_session(const std::string& session_id);
+
+    // Run the registered cleanup handlers outside the server mutex.
+    void invoke_session_cleanup(
+        const std::string& session_id,
+        const std::map<std::string, session_cleanup_handler>& handlers);
+
+    // Detach the calling heartbeat thread if it is still owned by the map.
+    void release_sse_thread(const std::string& session_id);
 };
 
 } // namespace mcp
