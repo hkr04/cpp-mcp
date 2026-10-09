@@ -265,102 +265,95 @@ TEST_F(VersioningTest, SupportedVersion) {
 // Test unsupported version
 TEST_F(VersioningTest, UnsupportedVersion) {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    try {
-        // Use httplib::Client to send unsupported version request
-        std::unique_ptr<httplib::Client> sse_client = std::make_unique<httplib::Client>("localhost", 8081);
-        std::unique_ptr<httplib::Client> http_client = std::make_unique<httplib::Client>("localhost", 8081);
-        
-        // Open SSE connection
-        std::promise<std::string> msg_endpoint_promise;
-        std::promise<std::string> sse_promise;
-        std::future<std::string> msg_endpoint = msg_endpoint_promise.get_future();
-        std::future<std::string> sse_response = sse_promise.get_future();
 
-        std::atomic<bool> sse_running{true};
-        std::atomic<bool> msg_endpoint_received{false};
-        std::atomic<bool> sse_response_received{false};
+    // Use httplib::Client to send an initialize request for a version this
+    // server does not implement. The result is delivered on the legacy SSE stream.
+    auto sse_client = std::make_unique<httplib::Client>("localhost", 8081);
+    auto http_client = std::make_unique<httplib::Client>("localhost", 8081);
+    sse_client->set_connection_timeout(2, 0);
+    sse_client->set_read_timeout(2, 0);
 
-        std::thread sse_thread([&]() {
-            sse_client->Get("/sse", [&](const char* data, size_t len) {
-                try {
-                    std::string response(data, len);
-                    size_t pos = response.find("data: ");
-                    if (pos != std::string::npos) {
-                        std::string data_content = response.substr(pos + 6);
-                        data_content = data_content.substr(0, data_content.find("\r\n"));
-                        
-                        if (!msg_endpoint_received.load() && response.find("endpoint") != std::string::npos) {
-                            msg_endpoint_received.store(true);
-                            try {
-                                msg_endpoint_promise.set_value(data_content);
-                            } catch (...) {
-                                // Ignore duplicate exception setting
-                            }
-                        } else if (!sse_response_received.load() && response.find("message") != std::string::npos) {
-                            sse_response_received.store(true);
-                            try {
-                                sse_promise.set_value(data_content);
-                            } catch (...) {
-                                // Ignore duplicate exception setting
-                            }
+    std::promise<std::string> msg_endpoint_promise;
+    std::promise<std::string> sse_promise;
+    std::future<std::string> msg_endpoint = msg_endpoint_promise.get_future();
+    std::future<std::string> sse_response = sse_promise.get_future();
+
+    std::atomic<bool> sse_running{true};
+    std::atomic<bool> msg_endpoint_received{false};
+    std::atomic<bool> sse_response_received{false};
+
+    std::thread sse_thread([&]() {
+        sse_client->Get("/sse", [&](const char* data, size_t len) {
+            try {
+                std::string response(data, len);
+                size_t pos = response.find("data: ");
+                if (pos != std::string::npos) {
+                    std::string data_content = response.substr(pos + 6);
+                    data_content = data_content.substr(0, data_content.find("\r\n"));
+
+                    if (!msg_endpoint_received.load() && response.find("endpoint") != std::string::npos) {
+                        msg_endpoint_received.store(true);
+                        try {
+                            msg_endpoint_promise.set_value(data_content);
+                        } catch (...) {
+                            // Ignore duplicate exception setting
+                        }
+                    } else if (!sse_response_received.load() && response.find("message") != std::string::npos) {
+                        sse_response_received.store(true);
+                        try {
+                            sse_promise.set_value(data_content);
+                        } catch (...) {
+                            // Ignore duplicate exception setting
                         }
                     }
-                } catch (const std::exception& e) {
-                    GTEST_LOG_(ERROR) << "SSE processing error: " << e.what();
                 }
-                return sse_running.load();
-            });
+            } catch (const std::exception& e) {
+                GTEST_LOG_(ERROR) << "SSE processing error: " << e.what();
+            }
+            return sse_running.load();
         });
-        
-        std::string endpoint = msg_endpoint.get();
-        EXPECT_FALSE(endpoint.empty());
-        
-        // Send unsupported version request
-        json req = request::create("initialize", {{"protocolVersion", "0.0.1"}}).to_json();
-        auto res = http_client->Post(endpoint.c_str(), req.dump(), "application/json");
-        
-        EXPECT_TRUE(res != nullptr);
-        EXPECT_EQ(res->status / 100, 2);
-        
-        auto mcp_res = json::parse(sse_response.get());
-        EXPECT_EQ(mcp_res["error"]["code"].get<int>(), static_cast<int>(error_code::invalid_params));
+    });
 
-        // Close all connections
-        sse_running.store(false);
-        
-        // Try to interrupt SSE connection
-        try {
-            sse_client->Get("/sse", [](const char*, size_t) { return false; });
-        } catch (...) {
-            // Ignore any exception
+    // Always stop and join the SSE helper. An assertion failure or a JSON
+    // exception used to skip cleanup, and ~std::thread then called terminate.
+    struct SseJoin {
+        std::atomic<bool>& running;
+        httplib::Client* client;
+        std::thread& thread;
+        ~SseJoin() {
+            running.store(false);
+            if (client != nullptr) {
+                client->stop();
+            }
+            if (thread.joinable()) {
+                thread.join();
+            }
         }
-        
-        // Wait for thread to finish (max 1 second)
-        if (sse_thread.joinable()) {
-            std::thread detacher([](std::thread& t) {
-                try {
-                    if (t.joinable()) {
-                        t.join();
-                    }
-                } catch (...) {
-                    if (t.joinable()) {
-                        t.detach();
-                    }
-                }
-            }, std::ref(sse_thread));
-            detacher.detach();
-        }
+    } sse_join{sse_running, sse_client.get(), sse_thread};
 
-        // Clean up resources
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        sse_client.reset();
-        http_client.reset();
-        
-        // Add delay to ensure resources are fully released
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    } catch (...) {
-        EXPECT_TRUE(false);
-    }
+    ASSERT_EQ(msg_endpoint.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    const std::string endpoint = msg_endpoint.get();
+    EXPECT_FALSE(endpoint.empty());
+
+    json req = request::create("initialize", {{"protocolVersion", "0.0.1"}}).to_json();
+    auto res = http_client->Post(endpoint.c_str(), req.dump(), "application/json");
+
+    ASSERT_TRUE(res != nullptr);
+    EXPECT_EQ(res->status / 100, 2);
+
+    ASSERT_EQ(sse_response.wait_for(std::chrono::seconds(5)), std::future_status::ready);
+    const json mcp_res = json::parse(sse_response.get());
+
+    // 2025-03-26 Version Negotiation: an unrecognized protocolVersion is not a
+    // JSON-RPC error. The server answers with a version it supports (MCP_VERSION)
+    // and the client disconnects if it cannot accept that version.
+    EXPECT_FALSE(mcp_res.contains("error"));
+    ASSERT_TRUE(mcp_res.contains("result"));
+    const json& result = mcp_res["result"];
+    ASSERT_TRUE(result.is_object());
+    ASSERT_TRUE(result.contains("protocolVersion"));
+    ASSERT_TRUE(result["protocolVersion"].is_string());
+    EXPECT_EQ(result["protocolVersion"].get<std::string>(), std::string(MCP_VERSION));
 }
 
 // Ping test environment
