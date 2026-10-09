@@ -809,6 +809,27 @@ protected:
         std::cout.rdbuf(orig_cout);
     }
     
+    std::vector<json> process_stdio(const std::string& input) {
+        mcp::server::configuration srv_conf;
+        mcp::server server(srv_conf);
+        std::istringstream in_stream(input);
+        std::ostringstream out_stream;
+
+        std::cin.rdbuf(in_stream.rdbuf());
+        std::cout.rdbuf(out_stream.rdbuf());
+        server.start_stdio();
+        std::cin.rdbuf(orig_cin);
+        std::cout.rdbuf(orig_cout);
+
+        std::istringstream output_stream(out_stream.str());
+        std::vector<json> responses;
+        std::string line;
+        while (std::getline(output_stream, line)) {
+            if (!line.empty()) responses.push_back(json::parse(line));
+        }
+        return responses;
+    }
+
     std::streambuf* orig_cin;
     std::streambuf* orig_cout;
 };
@@ -848,6 +869,84 @@ TEST_F(StdioTransportTest, IdentifiedPingProducesResponse) {
     EXPECT_EQ(response["jsonrpc"], "2.0");
     EXPECT_EQ(response["id"], 1);
     EXPECT_EQ(response["result"], json::object());
+}
+
+TEST_F(StdioTransportTest, InvalidEnvelopesPreserveSafeIdsAndRecover) {
+    const json ping = {{"jsonrpc", "2.0"}, {"id", 7}, {"method", "ping"}};
+    std::vector<json> invalid_requests;
+    json missing_method = ping;
+    missing_method.erase("method");
+    invalid_requests.push_back(missing_method);
+    for (const json& method : std::vector<json>{nullptr, true, 1, 1.5, json::array(), json::object()}) {
+        json invalid_request = ping;
+        invalid_request["method"] = method;
+        invalid_requests.push_back(invalid_request);
+    }
+    for (const json& id : std::vector<json>{nullptr, true, 1.5, 1.0, json::array(), json::object()}) {
+        json invalid_request = ping;
+        invalid_request["id"] = id;
+        invalid_requests.push_back(invalid_request);
+        invalid_request["jsonrpc"] = "1.0";
+        invalid_requests.push_back(invalid_request);
+    }
+    for (const json& params : std::vector<json>{nullptr, false, 1, "params", json::array()}) {
+        json invalid_request = ping;
+        invalid_request["params"] = params;
+        invalid_requests.push_back(invalid_request);
+    }
+    json missing_jsonrpc = ping;
+    missing_jsonrpc.erase("jsonrpc");
+    invalid_requests.push_back(missing_jsonrpc);
+    for (const json& jsonrpc : std::vector<json>{"1.0", nullptr, 2, true, json::array(), json::object()}) {
+        json invalid_request = ping;
+        invalid_request["jsonrpc"] = jsonrpc;
+        invalid_requests.push_back(invalid_request);
+    }
+    invalid_requests.push_back({{"jsonrpc", "2.0"}, {"id", "request-id"}});
+    invalid_requests.push_back({{"jsonrpc", "2.0"}, {"method", false}});
+    for (const json& root : std::vector<json>{nullptr, true, 1, "request", json::array()}) {
+        invalid_requests.push_back(root);
+    }
+
+    for (const json& invalid_request : invalid_requests) {
+        SCOPED_TRACE(invalid_request.dump());
+        const auto responses = process_stdio(invalid_request.dump() + "\n" + ping.dump() + "\n");
+        ASSERT_EQ(responses.size(), 2);
+        EXPECT_EQ(responses[0]["jsonrpc"], "2.0");
+        ASSERT_TRUE(responses[0].contains("error"));
+        EXPECT_EQ(responses[0]["error"]["code"], -32600);
+        EXPECT_TRUE(responses[0]["error"]["message"].is_string());
+        json expected_id = nullptr;
+        if (invalid_request.is_object() && invalid_request.contains("id") &&
+            (invalid_request["id"].is_string() || invalid_request["id"].is_number_integer())) {
+            expected_id = invalid_request["id"];
+        }
+        EXPECT_EQ(responses[0]["id"], expected_id);
+        EXPECT_FALSE(responses[0].contains("result"));
+        EXPECT_EQ(responses[1], (json{{"jsonrpc", "2.0"}, {"id", 7}, {"result", json::object()}}));
+    }
+}
+
+TEST_F(StdioTransportTest, ValidIdentifiedPingsAcceptOptionalObjectParams) {
+    for (const json& id : std::vector<json>{-7, "ping-id"}) {
+        for (bool include_params : {false, true}) {
+            json ping = {{"jsonrpc", "2.0"}, {"id", id}, {"method", "ping"}};
+            if (include_params) ping["params"] = json::object();
+            SCOPED_TRACE(ping.dump());
+            const auto responses = process_stdio(ping.dump() + "\n");
+            ASSERT_EQ(responses.size(), 1);
+            EXPECT_EQ(responses[0], (json{{"jsonrpc", "2.0"}, {"id", id}, {"result", json::object()}}));
+        }
+    }
+}
+
+TEST_F(StdioTransportTest, InvalidJsonRemainsParseErrorAndRecovers) {
+    const auto responses = process_stdio("{\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
+    ASSERT_EQ(responses.size(), 2);
+    EXPECT_EQ(responses[0]["jsonrpc"], "2.0");
+    EXPECT_EQ(responses[0]["error"]["code"], -32700);
+    EXPECT_TRUE(responses[0]["id"].is_null());
+    EXPECT_EQ(responses[1], (json{{"jsonrpc", "2.0"}, {"id", 1}, {"result", json::object()}}));
 }
 
 TEST_F(StdioTransportTest, StartStdioProcessing) {
