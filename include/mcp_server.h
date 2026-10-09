@@ -440,8 +440,9 @@ private:
     // Mutex for thread safety
     mutable std::mutex mutex_;
     
-    // Running flag
-    bool running_ = false;
+    // Running flag. Touched from the accept thread and from callers of
+    // start()/stop(), so it must be atomic.
+    std::atomic<bool> running_{false};
 
     // Max sessions limit
     unsigned int max_sessions_ = MCP_MAX_SESSIONS;

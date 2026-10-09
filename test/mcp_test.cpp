@@ -16,6 +16,18 @@
 
 #include <vector>
 #include <sstream>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 using namespace mcp;
 using json = nlohmann::ordered_json;
@@ -878,4 +890,120 @@ TEST_F(StdioTransportTest, StartStdioProcessing) {
     
     EXPECT_TRUE(found_init_result) << "Missing initialize response";
     EXPECT_TRUE(found_tool_result) << "Missing tools/call response";
+}
+
+namespace {
+
+// Holds 127.0.0.1 on an ephemeral port without SO_REUSEPORT so a later
+// httplib bind (which sets SO_REUSEPORT) fails with EADDRINUSE.
+class occupied_port {
+public:
+    occupied_port() {
+#ifdef _WIN32
+        WSADATA wsa_data;
+        if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+            return;
+        }
+        wsa_started_ = true;
+        sock_ = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (sock_ == INVALID_SOCKET) {
+            return;
+        }
+#else
+        sock_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (sock_ < 0) {
+            return;
+        }
+#endif
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = htons(0);
+        if (::bind(sock_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+            close_sock();
+            return;
+        }
+#ifdef _WIN32
+        int addr_len = static_cast<int>(sizeof(addr));
+#else
+        socklen_t addr_len = sizeof(addr);
+#endif
+        if (::getsockname(sock_, reinterpret_cast<sockaddr*>(&addr), &addr_len) != 0 ||
+            ::listen(sock_, 1) != 0) {
+            close_sock();
+            return;
+        }
+        port_ = ntohs(addr.sin_port);
+    }
+
+    ~occupied_port() { close_sock(); }
+
+    occupied_port(const occupied_port&) = delete;
+    occupied_port& operator=(const occupied_port&) = delete;
+
+    int port() const { return port_; }
+
+private:
+    void close_sock() {
+#ifdef _WIN32
+        if (sock_ != INVALID_SOCKET) {
+            ::closesocket(sock_);
+            sock_ = INVALID_SOCKET;
+        }
+        if (wsa_started_) {
+            WSACleanup();
+            wsa_started_ = false;
+        }
+#else
+        if (sock_ >= 0) {
+            ::close(sock_);
+            sock_ = -1;
+        }
+#endif
+    }
+
+#ifdef _WIN32
+    SOCKET sock_{INVALID_SOCKET};
+    bool wsa_started_{false};
+#else
+    int sock_{-1};
+#endif
+    int port_{0};
+};
+
+} // namespace
+
+// Regression for https://github.com/hkr04/cpp-mcp/issues/57:
+// non-blocking start() that fails to bind/listen must not std::terminate in ~server().
+TEST(ServerLifecycle, NonBlockingBindFailureDoesNotTerminateOnDestroy) {
+    occupied_port occupied;
+    ASSERT_GT(occupied.port(), 0);
+
+    server::configuration conf;
+    conf.host = "127.0.0.1";
+    conf.port = occupied.port();
+    // Keep the failure path from also spinning a large pool.
+    conf.threadpool_size = 1;
+
+    {
+        server server(conf);
+        EXPECT_FALSE(server.start(false));
+        EXPECT_FALSE(server.is_running());
+        // stop() after a failed start must be a no-op, not a second crash.
+        server.stop();
+        EXPECT_FALSE(server.is_running());
+    }
+}
+
+TEST(ServerLifecycle, NonBlockingStartStop) {
+    server::configuration conf;
+    conf.host = "127.0.0.1";
+    conf.port = 0;
+    conf.threadpool_size = 1;
+
+    server server(conf);
+    ASSERT_TRUE(server.start(false));
+    EXPECT_TRUE(server.is_running());
+    server.stop();
+    EXPECT_FALSE(server.is_running());
 }

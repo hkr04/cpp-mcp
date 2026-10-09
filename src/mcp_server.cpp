@@ -199,7 +199,9 @@ bool server::start(bool blocking) {
         }
         return true;
     } else {
-        // Start server in a separate thread
+        // Accept loop runs on its own thread. Wait here only until bind/listen
+        // has succeeded or failed, so start() does not report success before
+        // the socket is actually open.
         server_thread_ = std::make_unique<std::thread>([this]() {
             LOG_INFO("Starting server in separate thread");
             if (!http_server_->listen(host_.c_str(), port_)) {
@@ -208,18 +210,36 @@ bool server::start(bool blocking) {
                 return;
             }
         });
+
+        http_server_->wait_until_ready();
+        if (!http_server_->is_running()) {
+            // listen() failed. The worker has exited (or is exiting) and
+            // maintenance_thread_ is still joinable. Join both before
+            // returning; otherwise ~server() destroys a joinable std::thread
+            // and std::terminate()s.
+            stop();
+            return false;
+        }
+
         running_ = true;
         return true;
     }
 }
 
 void server::stop() {
-    if (!running_) {
+    // Non-blocking listen() failure clears running_ from the accept thread
+    // and returns, but server_thread_ / maintenance_thread_ stay joinable.
+    // Destroying a joinable std::thread calls std::terminate(), so workers
+    // that were actually started must be joined even when the server never
+    // became ready (or has already cleared the flag).
+    const bool was_running = running_.exchange(false);
+    const bool has_server_thread = server_thread_ && server_thread_->joinable();
+    const bool has_maintenance_thread = maintenance_thread_ && maintenance_thread_->joinable();
+    if (!was_running && !has_server_thread && !has_maintenance_thread) {
         return;
     }
-    
+
     LOG_INFO("Stopping MCP server on ", host_, ":", port_);
-    running_ = false;
 
     // Close maintenance thread
     if (maintenance_thread_ && maintenance_thread_->joinable()) {
