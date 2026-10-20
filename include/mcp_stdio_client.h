@@ -171,6 +171,9 @@ private:
     
     // Read thread function
     void read_thread_func();
+
+    // Handle one complete stdout frame from the server process.
+    void on_stdout_line(const std::string& line);
     
     // Send JSON-RPC request
     json send_jsonrpc(const request& req);

@@ -1275,3 +1275,295 @@ TEST(ServerLifecycle, StopClosesActiveSseSessionPromptly) {
     EXPECT_LT(std::chrono::steady_clock::now() - restart_stop, std::chrono::seconds(2));
     EXPECT_FALSE(server.is_running());
 }
+
+namespace {
+
+int container_depth(const std::string& text) {
+    int max_depth = 0;
+    const json parsed = json::parse(text, [&](int depth, json::parse_event_t event, json&) {
+        if (event == json::parse_event_t::array_start ||
+            event == json::parse_event_t::object_start) {
+            const int opened = depth + 1;
+            if (opened > max_depth) {
+                max_depth = opened;
+            }
+        }
+        return true;
+    });
+    (void)parsed;
+    return max_depth;
+}
+
+std::string nested_arrays(int depth) {
+    std::string text;
+    text.reserve(static_cast<size_t>(depth) * 2 + 1);
+    text.append(static_cast<size_t>(depth), '[');
+    text.push_back('0');
+    text.append(static_cast<size_t>(depth), ']');
+    return text;
+}
+
+std::string nested_empty_objects(int depth) {
+    if (depth <= 1) {
+        return "{}";
+    }
+    std::string text;
+    text.reserve(static_cast<size_t>(depth) * 6);
+    for (int i = 1; i < depth; ++i) {
+        text += "{\"a\":";
+    }
+    text += "{}";
+    text.append(static_cast<size_t>(depth - 1), '}');
+    return text;
+}
+
+// Root object + params object + (depth - 2) arrays under params.n.
+std::string ping_at_depth(int depth) {
+    const int arrays = depth - 2;
+    std::string text = R"({"jsonrpc":"2.0","id":1,"method":"ping","params":{"n":)";
+    text.append(static_cast<size_t>(arrays), '[');
+    text.push_back('0');
+    text.append(static_cast<size_t>(arrays), ']');
+    text += "}}";
+    return text;
+}
+
+std::string initialize_at_depth(int depth) {
+    // Deepest path is root object + params object + arrays under params.n.
+    // capabilities and clientInfo are siblings of n, so they do not add depth.
+    const int arrays = depth - 2;
+    std::string text =
+        R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"},"n":)";
+    text.append(static_cast<size_t>(arrays), '[');
+    text.push_back('0');
+    text.append(static_cast<size_t>(arrays), ']');
+    text += "}}";
+    return text;
+}
+
+class scoped_http_server {
+public:
+    explicit scoped_http_server(int port) {
+        server::configuration conf;
+        conf.host = "127.0.0.1";
+        conf.port = port;
+        conf.threadpool_size = 2;
+        server_ = std::make_unique<server>(conf);
+        started_ = server_->start(false);
+    }
+
+    ~scoped_http_server() {
+        if (server_) {
+            server_->stop();
+        }
+    }
+
+    scoped_http_server(const scoped_http_server&) = delete;
+    scoped_http_server& operator=(const scoped_http_server&) = delete;
+
+    bool started() const { return started_; }
+
+private:
+    std::unique_ptr<server> server_;
+    bool started_{false};
+};
+
+} // namespace
+
+TEST(PeerJsonLimits, AcceptsNestingAtTheRubyLimit) {
+    const std::string arrays = nested_arrays(kMaxJsonNesting);
+    const std::string objects = nested_empty_objects(kMaxJsonNesting);
+    EXPECT_EQ(container_depth(arrays), kMaxJsonNesting);
+    EXPECT_EQ(container_depth(objects), kMaxJsonNesting);
+
+    const json parsed_arrays = parse_peer_json(arrays);
+    json cursor = parsed_arrays;
+    for (int i = 0; i < kMaxJsonNesting; ++i) {
+        ASSERT_TRUE(cursor.is_array());
+        ASSERT_EQ(cursor.size(), 1u);
+        cursor = cursor[0];
+    }
+    EXPECT_EQ(cursor, 0);
+
+    const json parsed_objects = parse_peer_json(objects);
+    EXPECT_TRUE(parsed_objects.is_object());
+}
+
+TEST(PeerJsonLimits, RejectsNestingPastTheRubyLimit) {
+    EXPECT_THROW(parse_peer_json(nested_arrays(kMaxJsonNesting + 1)), peer_json_too_deep);
+    EXPECT_THROW(parse_peer_json(nested_empty_objects(kMaxJsonNesting + 1)), peer_json_too_deep);
+
+    // A scalar inside the allowed depth still parses. One more container does not,
+    // even when that container is empty (no value callback at depth + 1).
+    EXPECT_NO_THROW(parse_peer_json(nested_arrays(kMaxJsonNesting)));
+    EXPECT_THROW(parse_peer_json(std::string(kMaxJsonNesting + 1, '[') +
+                                 std::string(kMaxJsonNesting + 1, ']')),
+                 peer_json_too_deep);
+}
+
+TEST(PeerJsonLimits, RejectsBodyOverFourMebibytes) {
+    std::string at_limit(kMaxRequestBytes, 'a');
+    at_limit.front() = '"';
+    at_limit.back() = '"';
+    ASSERT_EQ(at_limit.size(), kMaxRequestBytes);
+    const json parsed = parse_peer_json(at_limit);
+    EXPECT_TRUE(parsed.is_string());
+    EXPECT_EQ(parsed.get<std::string>().size(), kMaxRequestBytes - 2);
+
+    std::string over_limit(kMaxRequestBytes + 1, ' ');
+    EXPECT_THROW(parse_peer_json(over_limit), peer_json_too_large);
+}
+
+TEST_F(StdioTransportTest, NestingAtLimitWorksAndDeeperNestingDoesNotKillTheServer) {
+    const std::string at_limit = ping_at_depth(kMaxJsonNesting);
+    ASSERT_EQ(container_depth(at_limit), kMaxJsonNesting);
+    const auto accepted = process_stdio(at_limit + "\n");
+    ASSERT_EQ(accepted.size(), 1u);
+    EXPECT_EQ(accepted[0]["jsonrpc"], "2.0");
+    EXPECT_EQ(accepted[0]["id"], 1);
+    EXPECT_EQ(accepted[0]["result"], json::object());
+
+    const json follow_up = {{"jsonrpc", "2.0"}, {"id", 7}, {"method", "ping"}};
+    const std::string too_deep = ping_at_depth(kMaxJsonNesting + 1);
+    ASSERT_EQ(container_depth(too_deep), kMaxJsonNesting + 1);
+    const auto rejected = process_stdio(too_deep + "\n" + follow_up.dump() + "\n");
+    ASSERT_EQ(rejected.size(), 2u);
+    EXPECT_EQ(rejected[0]["error"]["code"], -32700);
+    EXPECT_TRUE(rejected[0]["id"].is_null());
+    EXPECT_EQ(rejected[1], (json{{"jsonrpc", "2.0"}, {"id", 7}, {"result", json::object()}}));
+}
+
+TEST_F(StdioTransportTest, OversizedLineIsRejectedAndServerKeepsServing) {
+    const json follow_up = {{"jsonrpc", "2.0"}, {"id", 9}, {"method", "ping"}};
+    std::string oversized(kMaxRequestBytes + 1, 'x');
+    const auto responses = process_stdio(oversized + "\n" + follow_up.dump() + "\n");
+    ASSERT_EQ(responses.size(), 2u);
+    EXPECT_EQ(responses[0]["jsonrpc"], "2.0");
+    EXPECT_EQ(responses[0]["error"]["code"], -32600);
+    EXPECT_EQ(responses[0]["error"]["message"], "Payload too large");
+    EXPECT_EQ(responses[1], (json{{"jsonrpc", "2.0"}, {"id", 9}, {"result", json::object()}}));
+}
+
+TEST_F(StdioTransportTest, DeepToolArgumentStringIsInvalidParams) {
+    mcp::server::configuration srv_conf;
+    mcp::server server(srv_conf);
+    mcp::tool echo_tool = mcp::tool_builder("echo")
+        .with_description("Echo tool")
+        .build();
+    server.register_tool(echo_tool, [](const mcp::json& params, const std::string&) -> mcp::json {
+        return json::array({
+            {{"type", "text"}, {"text", params.is_array() ? "array" : "other"}}
+        });
+    });
+
+    const std::string init =
+        R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"t","version":"1"}}})";
+    const std::string initialized = R"({"jsonrpc":"2.0","method":"notifications/initialized"})";
+    json shallow_call = {
+        {"jsonrpc", "2.0"},
+        {"id", 1},
+        {"method", "tools/call"},
+        {"params", {{"name", "echo"}, {"arguments", nested_arrays(4)}}}
+    };
+    json deep_call = {
+        {"jsonrpc", "2.0"},
+        {"id", 2},
+        {"method", "tools/call"},
+        {"params", {{"name", "echo"}, {"arguments", nested_arrays(kMaxJsonNesting + 1)}}}
+    };
+    const json follow_up = {{"jsonrpc", "2.0"}, {"id", 3}, {"method", "ping"}};
+
+    std::istringstream in_stream(init + "\n" + initialized + "\n" + shallow_call.dump() + "\n" +
+                                 deep_call.dump() + "\n" + follow_up.dump() + "\n");
+    std::ostringstream out_stream;
+    std::cin.rdbuf(in_stream.rdbuf());
+    std::cout.rdbuf(out_stream.rdbuf());
+    server.start_stdio();
+    std::cin.rdbuf(orig_cin);
+    std::cout.rdbuf(orig_cout);
+
+    std::vector<json> responses;
+    std::istringstream output_stream(out_stream.str());
+    std::string line;
+    while (std::getline(output_stream, line)) {
+        if (!line.empty()) {
+            responses.push_back(json::parse(line));
+        }
+    }
+
+    ASSERT_EQ(responses.size(), 4u);
+    EXPECT_EQ(responses[1]["id"], 1);
+    EXPECT_EQ(responses[1]["result"]["content"][0]["text"], "array");
+    EXPECT_EQ(responses[2]["id"], 2);
+    EXPECT_EQ(responses[2]["error"]["code"], -32602);
+    EXPECT_EQ(responses[3], (json{{"jsonrpc", "2.0"}, {"id", 3}, {"result", json::object()}}));
+}
+
+TEST(PeerJsonLimits, StreamableHttpRejectsDeepAndOversizedBodiesBeforeSessionLookup) {
+    const int port = ephemeral_loopback_port();
+    ASSERT_GT(port, 0);
+    scoped_http_server server(port);
+    ASSERT_TRUE(server.started()) << "port " << port;
+
+    httplib::Client client("127.0.0.1", port);
+    client.set_connection_timeout(2, 0);
+    client.set_read_timeout(10, 0);
+    client.set_write_timeout(10, 0);
+
+    const std::string at_limit = initialize_at_depth(kMaxJsonNesting);
+    ASSERT_EQ(container_depth(at_limit), kMaxJsonNesting);
+    const auto accepted = client.Post("/mcp", at_limit, "application/json");
+    ASSERT_TRUE(accepted) << "depth-64 initialize failed to connect";
+    EXPECT_EQ(accepted->status, 200);
+    const json accepted_body = json::parse(accepted->body);
+    EXPECT_EQ(accepted_body["id"], 1);
+    EXPECT_TRUE(accepted_body.contains("result"));
+    EXPECT_FALSE(accepted->get_header_value("Mcp-Session-Id").empty());
+
+    const std::string too_deep = ping_at_depth(kMaxJsonNesting + 1);
+    const auto rejected = client.Post("/mcp", too_deep, "application/json");
+    ASSERT_TRUE(rejected) << "deep POST dropped the connection";
+    EXPECT_EQ(rejected->status, 400);
+    const json rejected_body = json::parse(rejected->body);
+    EXPECT_EQ(rejected_body["error"]["code"], -32700);
+    EXPECT_EQ(rejected_body["error"]["message"], "Invalid JSON");
+    EXPECT_EQ(rejected->body.find("Missing Mcp-Session-Id"), std::string::npos);
+
+    const std::string oversized(kMaxRequestBytes + 1, '{');
+    const auto too_big = client.Post("/mcp", oversized, "application/json");
+    ASSERT_TRUE(too_big) << "oversize POST dropped the connection";
+    EXPECT_EQ(too_big->status, 413);
+    const json too_big_body = json::parse(too_big->body);
+    EXPECT_EQ(too_big_body["error"]["code"], -32600);
+    EXPECT_EQ(too_big_body["error"]["message"], "Payload too large");
+
+    const auto alive = client.Post("/mcp",
+        std::string(R"({"jsonrpc":"2.0","id":1,"method":"ping"})"),
+        "application/json");
+    ASSERT_TRUE(alive);
+    EXPECT_EQ(alive->status, 400);
+    EXPECT_NE(alive->body.find("Missing Mcp-Session-Id"), std::string::npos);
+}
+
+TEST(PeerJsonLimits, LegacyHttpMessageEndpointRejectsDeepJsonAndKeepsServing) {
+    const int port = ephemeral_loopback_port();
+    ASSERT_GT(port, 0);
+    scoped_http_server server(port);
+    ASSERT_TRUE(server.started()) << "port " << port;
+
+    httplib::Client client("127.0.0.1", port);
+    client.set_connection_timeout(2, 0);
+    client.set_read_timeout(5, 0);
+
+    const auto rejected = client.Post("/message", ping_at_depth(kMaxJsonNesting + 1), "application/json");
+    ASSERT_TRUE(rejected);
+    EXPECT_EQ(rejected->status, 400);
+    const json rejected_body = json::parse(rejected->body);
+    EXPECT_EQ(rejected_body["error"]["code"], -32700);
+
+    const auto alive = client.Post("/message",
+        std::string(R"({"jsonrpc":"2.0","id":1,"method":"ping"})"),
+        "application/json");
+    ASSERT_TRUE(alive);
+    EXPECT_EQ(alive->status, 202);
+}

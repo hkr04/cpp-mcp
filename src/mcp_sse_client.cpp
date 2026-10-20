@@ -373,7 +373,7 @@ bool sse_client::parse_sse_data(const char* data, size_t length) {
             return true;
         } else if (event_type == "message") {
             try {
-                json response = json::parse(data_content);
+                json response = parse_peer_json(data_content);
 
                 if (response.contains("jsonrpc") && response.contains("id") && !response["id"].is_null()) {
                     // Use the same serialization method as when storing the request ID
@@ -401,7 +401,7 @@ bool sse_client::parse_sse_data(const char* data, size_t length) {
                 } else {
                     LOG_WARNING("Received invalid JSON-RPC response: ", response.dump());
                 }
-            } catch (const json::exception& e) {
+            } catch (const std::exception& e) {
                 LOG_ERROR("Failed to parse JSON-RPC response: ", e.what());
             }
             return true;
@@ -520,7 +520,7 @@ json sse_client::send_jsonrpc(const request& req) {
     
     if (result->status / 100 != 2) {
         try {
-            json res_json = json::parse(result->body);
+            json res_json = parse_peer_json(result->body);
             
             {
                 std::lock_guard<std::mutex> response_lock(response_mutex_);
@@ -539,7 +539,9 @@ json sse_client::send_jsonrpc(const request& req) {
             } else {
                 return json::object();
             }
-        } catch (const json::exception& e) {
+        } catch (const mcp_exception&) {
+            throw;
+        } catch (const std::exception& e) {
             {
                 std::lock_guard<std::mutex> response_lock(response_mutex_);
                 pending_requests_.erase(req_id_key);
