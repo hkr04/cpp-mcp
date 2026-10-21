@@ -17,7 +17,7 @@
 #include <stdexcept>
 
 // Include the JSON library for parsing and generating JSON
-#include "json.hpp"
+#include "nlohmann/json.hpp"
 
 namespace mcp {
 
