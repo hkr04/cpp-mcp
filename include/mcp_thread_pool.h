@@ -114,63 +114,48 @@ private:
     }
 
     void worker_loop() {
-        bool is_shrinking = false;
         while (true) {
             std::function<void()> task;
-            
+
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
-                
+
                 idle_threads_++;
-                
+
                 // Wait for tasks or idle timeout
-                bool is_timeout = !condition_.wait_for(lock, idle_timeout_, [this] { 
-                    return stop_ || !tasks_.empty(); 
+                const bool is_timeout = !condition_.wait_for(lock, idle_timeout_, [this] {
+                    return stop_ || !tasks_.empty();
                 });
-                
+
                 idle_threads_--;
-                
+
                 // Exit condition 1: Destructor called and queue is empty
-                if (stop_ && tasks_.empty()) {
-                    is_shrinking = true;
-                    active_threads_--;
-                    break;
-                }
-                
                 // Exit condition 2: Thread timed out, queue is empty, and we can shrink
-                if (is_timeout && tasks_.empty() && active_threads_ > min_threads_) {
-                    is_shrinking = true;
-                    active_threads_--;
-                    break;
+                const bool stopping = stop_ && tasks_.empty();
+                const bool shrinking = is_timeout && tasks_.empty() && active_threads_ > min_threads_;
+                if (stopping || shrinking) {
+                    // The destructor waits until active_threads_ hits zero, then
+                    // destroys this pool. Publish the exit and wake it before
+                    // releasing the mutex, and do not touch the pool afterward.
+                    // A later lock (the old post-loop notify) races that destroy:
+                    // another worker can already have dropped the count to zero.
+                    if (active_threads_.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+                        shutdown_cv_.notify_all();
+                    }
+                    return;
                 }
 
                 // Handle spurious wakeups
                 if (tasks_.empty()) {
                     continue;
                 }
-                
+
                 task = std::move(tasks_.front());
                 tasks_.pop();
             }
-            
+
             // Execute the task without holding the lock
             task();
-        }
-        
-        // Thread is terminating, update counts and notify destructor if needed
-        {
-            if (is_shrinking) {
-                std::unique_lock<std::mutex> lock(queue_mutex_);
-                if (active_threads_ == 0) {
-                    shutdown_cv_.notify_all();
-                }
-            } else {
-                std::unique_lock<std::mutex> lock(queue_mutex_);
-                active_threads_--;
-                if (active_threads_ == 0) {
-                    shutdown_cv_.notify_all();
-                }
-            }
         }
     }
 

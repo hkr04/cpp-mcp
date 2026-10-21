@@ -1567,3 +1567,15 @@ TEST(PeerJsonLimits, LegacyHttpMessageEndpointRejectsDeepJsonAndKeepsServing) {
     ASSERT_TRUE(alive);
     EXPECT_EQ(alive->status, 202);
 }
+
+// Each server owns a thread pool of detached workers. Stdio tests construct and
+// destroy many servers back-to-back; a worker that touched the pool after the
+// destructor observed active_threads_ == 0 used to corrupt the next pool's mutex
+// (SIGSEGV / glibc "mutex->__data.__owner == 0").
+TEST(ThreadPool, DestructionDoesNotRaceDetachedWorkers) {
+    for (int i = 0; i < 400; ++i) {
+        thread_pool pool(4, 8, 60000);
+        auto value = pool.enqueue([i] { return i; });
+        EXPECT_EQ(value.get(), i);
+    }
+}
