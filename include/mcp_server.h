@@ -487,8 +487,8 @@ private:
     void handle_mcp_get(const httplib::Request& req, httplib::Response& res);
     void handle_mcp_delete(const httplib::Request& req, httplib::Response& res);
 
-    // Parse a single JSON-RPC message from JSON
-    request parse_jsonrpc_message(const json& j) const;
+    // Parse a single JSON-RPC message from JSON. Moves `params` out of `j`.
+    request parse_jsonrpc_message(json& j) const;
 
     // Send a JSON-RPC message to a client
     void send_jsonrpc(const std::string& session_id, const json& message);

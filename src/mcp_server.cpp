@@ -7,12 +7,81 @@
  */
 
 #include "mcp_server.h"
+#include <limits>
 #include <sys/stat.h>
 
 namespace {
 bool file_exists(const std::string& path) {
     struct stat st;
     return ::stat(path.c_str(), &st) == 0;
+}
+
+// Read one newline-delimited stdio frame, storing at most kMaxRequestBytes.
+// A longer frame is discarded through the next newline (or EOF) and reported
+// via `too_large`, so the following frame stays aligned and the buffer cannot
+// grow without bound. Returns false only on EOF with nothing to process.
+bool read_stdio_frame(std::string& line, bool& too_large) {
+    line.clear();
+    too_large = false;
+
+    std::streambuf* buf = std::cin.rdbuf();
+    while (true) {
+        const int ch = buf->sbumpc();
+        if (ch == EOF) {
+            return too_large || !line.empty();
+        }
+        if (ch == '\n') {
+            return true;
+        }
+        if (line.size() >= mcp::kMaxRequestBytes) {
+            too_large = true;
+            line.clear();
+            line.shrink_to_fit();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            return true;
+        }
+        line.push_back(static_cast<char>(ch));
+    }
+}
+
+void write_peer_json_http_error(httplib::Response& res, const std::exception& error) {
+    if (dynamic_cast<const mcp::peer_json_too_large*>(&error) != nullptr) {
+        res.status = 413;
+        res.set_content(
+            mcp::response::create_error(
+                nullptr,
+                mcp::error_code::invalid_request,
+                "Payload too large").to_json().dump(),
+            "application/json");
+        return;
+    }
+
+    res.status = 400;
+    res.set_content(
+        mcp::response::create_error(
+            nullptr,
+            mcp::error_code::parse_error,
+            "Invalid JSON").to_json().dump(),
+        "application/json");
+}
+
+void configure_peer_input_limits(httplib::Server& http) {
+    http.set_payload_max_length(mcp::kMaxRequestBytes);
+    http.set_error_handler([](const httplib::Request&, httplib::Response& res) {
+        // httplib rejects a declared Content-Length above the cap before the
+        // route handler runs, with an empty body. Fill in the JSON-RPC error
+        // Ruby returns for the same case. Leave handler-authored 4xx bodies alone.
+        if (res.status != 413 || !res.body.empty()) {
+            return httplib::Server::HandlerResponse::Unhandled;
+        }
+        res.set_content(
+            mcp::response::create_error(
+                nullptr,
+                mcp::error_code::invalid_request,
+                "Payload too large").to_json().dump(),
+            "application/json");
+        return httplib::Server::HandlerResponse::Handled;
+    });
 }
 } // anonymous namespace
 
@@ -49,6 +118,8 @@ server::server(const server::configuration& conf)
     #else
      http_server_ = std::make_unique<httplib::Server>();
     #endif
+
+    configure_peer_input_limits(*http_server_);
 }
 
 server::~server() {
@@ -58,12 +129,25 @@ server::~server() {
 void server::start_stdio() {
     running_ = true;
     std::string line;
+    bool too_large = false;
     std::string session_id = "stdio_session_" + std::to_string(std::time(nullptr));
     
-    while (std::getline(std::cin, line)) {
+    while (read_stdio_frame(line, too_large)) {
+        if (too_large) {
+            json err_res = {
+                {"jsonrpc", "2.0"},
+                {"error", {
+                    {"code", static_cast<int>(error_code::invalid_request)},
+                    {"message", "Payload too large"}
+                }},
+                {"id", nullptr}
+            };
+            std::cout << err_res.dump() << "\n" << std::flush;
+            continue;
+        }
         if (line.empty()) continue;
         try {
-            json req_json = json::parse(line);
+            json req_json = parse_peer_json(line);
             request req;
             const bool valid_id = req_json.is_object() && req_json.contains("id") &&
                 (req_json["id"].is_string() || req_json["id"].is_number_integer());
@@ -80,7 +164,7 @@ void server::start_stdio() {
                 }
                 req.method = req_json.value("method", "");
                 if (req_json.contains("params")) {
-                    req.params = req_json["params"];
+                    req.params = std::move(req_json["params"]);
                 }
                 
                 json res = process_request(req, session_id);
@@ -593,8 +677,8 @@ void server::register_tool(const tool& tool, tool_handler handler) {
 
             if (tool_args.is_string()) {
                 try {
-                    tool_args = json::parse(tool_args.get<std::string>());
-                } catch (const json::exception& e) {
+                    tool_args = parse_peer_json(tool_args.get<std::string>());
+                } catch (const std::exception& e) {
                     throw mcp_exception(error_code::invalid_params, "Invalid JSON arguments: " + std::string(e.what()));
                 }
             }
@@ -869,14 +953,14 @@ void server::handle_jsonrpc(const httplib::Request& req, httplib::Response& res)
         }
     }
     
-    // Parse request
+    // Parse request before any session lookup. Depth and size limits apply here
+    // so an unauthenticated body cannot exhaust the stack or be parsed unbounded.
     json req_json;
     try {
-        req_json = json::parse(req.body);
-    } catch (const json::exception& e) {
+        req_json = parse_peer_json(req.body);
+    } catch (const std::exception& e) {
         LOG_ERROR("Failed to parse JSON request: ", e.what());
-        res.status = 400;
-        res.set_content("{\"error\":\"Invalid JSON\"}", "application/json");
+        write_peer_json_http_error(res, e);
         return;
     }
     
@@ -909,7 +993,7 @@ void server::handle_jsonrpc(const httplib::Request& req, httplib::Response& res)
         }
         mcp_req.method = req_json["method"].get<std::string>();
         if (req_json.contains("params")) {
-            mcp_req.params = req_json["params"];
+            mcp_req.params = std::move(req_json["params"]);
         }
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to create request object: ", e.what());
@@ -955,7 +1039,7 @@ void server::handle_jsonrpc(const httplib::Request& req, httplib::Response& res)
 // Streamable HTTP transport (2025-03-26 spec)
 // ---------------------------------------------------------------------------
 
-request server::parse_jsonrpc_message(const json& j) const {
+request server::parse_jsonrpc_message(json& j) const {
     request req;
     req.jsonrpc = j.value("jsonrpc", "2.0");
     if (j.contains("id") && !j["id"].is_null()) {
@@ -965,7 +1049,7 @@ request server::parse_jsonrpc_message(const json& j) const {
         req.method = j["method"].get<std::string>();
     }
     if (j.contains("params")) {
-        req.params = j["params"];
+        req.params = std::move(j["params"]);
     }
     return req;
 }
@@ -978,16 +1062,14 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
     res.set_header("Access-Control-Expose-Headers", "Mcp-Session-Id, MCP-Protocol-Version");
     res.set_header("MCP-Protocol-Version", MCP_VERSION);
 
-    // Parse JSON body
+    // Parse JSON body before the session lookup. An oversized or too-deep body
+    // must be rejected here, including for an unauthenticated POST to /mcp.
     json body;
     try {
-        body = json::parse(req.body);
-    } catch (const json::exception& e) {
+        body = parse_peer_json(req.body);
+    } catch (const std::exception& e) {
         LOG_ERROR("Failed to parse JSON: ", e.what());
-        res.status = 400;
-        res.set_content(
-            response::create_error(nullptr, error_code::parse_error, "Invalid JSON").to_json().dump(),
-            "application/json");
+        write_peer_json_http_error(res, e);
         return;
     }
 
@@ -1027,14 +1109,16 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
         }
     }
 
-    // Handle batched requests
+    // Handle batched requests. Move each element so params are not copied again
+    // when parse_jsonrpc_message takes them.
     std::vector<json> items;
     if (body.is_array()) {
-        for (const auto& item : body) {
-            items.push_back(item);
+        items.reserve(body.size());
+        for (auto& item : body) {
+            items.push_back(std::move(item));
         }
     } else {
-        items.push_back(body);
+        items.push_back(std::move(body));
     }
 
     // Categorize: are there any requests (with id), or only notifications/responses?
@@ -1049,7 +1133,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
 
     // If all notifications/responses, process and return 202
     if (all_notifications_or_responses && !has_requests) {
-        for (const auto& item : items) {
+        for (auto& item : items) {
             auto mcp_req = parse_jsonrpc_message(item);
             if (!session_id.empty()) {
                 process_request(mcp_req, session_id);
@@ -1099,7 +1183,7 @@ void server::handle_mcp_post(const httplib::Request& req, httplib::Response& res
 
     // Process all items, collect responses for requests
     json responses = json::array();
-    for (const auto& item : items) {
+    for (auto& item : items) {
         auto mcp_req = parse_jsonrpc_message(item);
 
         if (mcp_req.is_notification()) {

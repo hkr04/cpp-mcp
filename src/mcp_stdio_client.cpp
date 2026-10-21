@@ -26,6 +26,51 @@
 #include <iostream>
 #include <chrono>
 
+namespace {
+
+// Pull complete newline-delimited frames out of `pending`. A frame over
+// kMaxRequestBytes, or a buffer that grows past that cap with no newline, is
+// discarded so a peer cannot exhaust memory before the line is parsed.
+template <typename Fn>
+void consume_stdio_frames(std::string& pending, bool& discarding, Fn&& on_line) {
+    if (discarding) {
+        const auto newline = pending.find('\n');
+        if (newline == std::string::npos) {
+            pending.clear();
+            return;
+        }
+        pending.erase(0, newline + 1);
+        discarding = false;
+    }
+
+    while (true) {
+        const auto newline = pending.find('\n');
+        if (newline == std::string::npos) {
+            if (pending.size() > mcp::kMaxRequestBytes) {
+                pending.clear();
+                discarding = true;
+                LOG_ERROR("Dropping stdio frame larger than ", mcp::kMaxRequestBytes, " bytes");
+            }
+            return;
+        }
+        if (newline > mcp::kMaxRequestBytes) {
+            pending.erase(0, newline + 1);
+            LOG_ERROR("Dropping stdio frame larger than ", mcp::kMaxRequestBytes, " bytes");
+            continue;
+        }
+        if (newline == 0) {
+            pending.erase(0, 1);
+            continue;
+        }
+
+        std::string line = pending.substr(0, newline);
+        pending.erase(0, newline + 1);
+        on_line(line);
+    }
+}
+
+} // namespace
+
 namespace mcp {
 
 stdio_client::stdio_client(const std::string& command, const json& env_vars, const json& capabilities)
@@ -580,12 +625,51 @@ void stdio_client::stop_server_process() {
     LOG_INFO("Server process stopped");
 }
 
+void stdio_client::on_stdout_line(const std::string& line) {
+    try {
+        json message = parse_peer_json(line);
+
+        if (message.contains("jsonrpc") && message["jsonrpc"] == "2.0") {
+            if (message.contains("id") && !message["id"].is_null()) {
+                json id = message["id"];
+
+                std::lock_guard<std::mutex> lock(response_mutex_);
+                auto it = pending_requests_.find(id);
+
+                if (it != pending_requests_.end()) {
+                    if (message.contains("result")) {
+                        it->second.set_value(message["result"]);
+                    } else if (message.contains("error")) {
+                        json error_result = {
+                            {"isError", true},
+                            {"error", message["error"]}
+                        };
+                        it->second.set_value(error_result);
+                    } else {
+                        it->second.set_value(json::object());
+                    }
+
+                    pending_requests_.erase(it);
+                } else {
+                    LOG_WARNING("Received response for unknown request ID: ", id);
+                }
+            } else if (message.contains("method")) {
+                LOG_INFO("Received request/notification: ", message["method"]);
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_ERROR("Failed to parse stdio message: ", e.what());
+    }
+}
+
 void stdio_client::read_thread_func() {
     LOG_INFO("Read thread started");
     
     const int buffer_size = 4096;
     char buffer[buffer_size];
     std::string data_buffer;
+    bool discarding_oversize = false;
+    auto on_line = [this](const std::string& line) { on_stdout_line(line); };
     
 #if defined(_WIN32)
     // Windows implementation
@@ -604,54 +688,7 @@ void stdio_client::read_thread_func() {
             retry_count = 0;  // Reset retry count
             buffer[bytes_read] = '\0';
             data_buffer.append(buffer, bytes_read);
-            
-            // Process complete JSON-RPC message
-            size_t pos = 0;
-            while ((pos = data_buffer.find('\n')) != std::string::npos) {
-                std::string line = data_buffer.substr(0, pos);
-                data_buffer.erase(0, pos + 1);
-                
-                if (!line.empty()) {
-                    try {
-                        json message = json::parse(line);
-                        
-                        if (message.contains("jsonrpc") && message["jsonrpc"] == "2.0") {
-                            if (message.contains("id") && !message["id"].is_null()) {
-                                // This is a response
-                                json id = message["id"];
-                                
-                                std::lock_guard<std::mutex> lock(response_mutex_);
-                                auto it = pending_requests_.find(id);
-                                
-                                if (it != pending_requests_.end()) {
-                                    if (message.contains("result")) {
-                                        it->second.set_value(message["result"]);
-                                    } else if (message.contains("error")) {
-                                        json error_result = {
-                                            {"isError", true},
-                                            {"error", message["error"]}
-                                        };
-                                        it->second.set_value(error_result);
-                                    } else {
-                                        it->second.set_value(json::object());
-                                    }
-                                    
-                                    pending_requests_.erase(it);
-                                } else {
-                                    LOG_WARNING("Received response for unknown request ID: ", id);
-                                }
-                            } else if (message.contains("method")) {
-                                // This is a request or notification
-                                LOG_INFO("Received request/notification: ", message["method"]);
-                                // Currently not handling requests from the server
-                            }
-                        }
-                    } catch (const json::exception& e) {
-                        (e);
-                        LOG_INFO("message: ", line);
-                    }
-                }
-            }
+            consume_stdio_frames(data_buffer, discarding_oversize, on_line);
         } else if (!success) {
             DWORD error = GetLastError();
             
@@ -714,53 +751,7 @@ void stdio_client::read_thread_func() {
         if (bytes_read > 0) {
             buffer[bytes_read] = '\0';
             data_buffer.append(buffer, bytes_read);
-            
-            // Process complete JSON-RPC message
-            size_t pos = 0;
-            while ((pos = data_buffer.find('\n')) != std::string::npos) {
-                std::string line = data_buffer.substr(0, pos);
-                data_buffer.erase(0, pos + 1);
-                
-                if (!line.empty()) {
-                    try {
-                        json message = json::parse(line);
-                        
-                        if (message.contains("jsonrpc") && message["jsonrpc"] == "2.0") {
-                            if (message.contains("id") && !message["id"].is_null()) {
-                                // This is a response
-                                json id = message["id"];
-                                
-                                std::lock_guard<std::mutex> lock(response_mutex_);
-                                auto it = pending_requests_.find(id);
-                                
-                                if (it != pending_requests_.end()) {
-                                    if (message.contains("result")) {
-                                        it->second.set_value(message["result"]);
-                                    } else if (message.contains("error")) {
-                                        json error_result = {
-                                            {"isError", true},
-                                            {"error", message["error"]}
-                                        };
-                                        it->second.set_value(error_result);
-                                    } else {
-                                        it->second.set_value(json::object());
-                                    }
-                                    
-                                    pending_requests_.erase(it);
-                                } else {
-                                    LOG_WARNING("Received response for unknown request ID: ", id);
-                                }
-                            } else if (message.contains("method")) {
-                                // This is a request or notification
-                                LOG_INFO("Received request/notification: ", message["method"]);
-                                // Currently not handling requests from the server
-                            }
-                        }
-                    } catch (const json::exception& e) {
-                        LOG_INFO("message: ", line);
-                    }
-                }
-            }
+            consume_stdio_frames(data_buffer, discarding_oversize, on_line);
         } else if (bytes_read == 0) {
             // Pipe is closed
             LOG_WARNING("Pipe closed by server");
